@@ -1,21 +1,33 @@
 // SPDX-License-Identifier: UNLICENSED
 pragma solidity ^0.8.21;
 
-contract ScoreContract {
-    error ScoreMustBeGreaterThanZero();
-    event ScoreSubmitted(uint256 indexed score, address indexed submitter);
+import {Ownable} from "openzeppelin-contracts/contracts/access/Ownable.sol";
 
-    mapping(address => uint256) public scores;
+contract Score is Ownable {
+    error ArrayLengthMustBeEqual();
+    
+    event ScoreIncremented(address indexed account, uint256 indexed increment);
 
-    function submitScore(uint256 _score) public {
-        if(_score == 0) {
-            revert ScoreMustBeGreaterThanZero();
-        }
-        scores[msg.sender] = _score; 
-        emit ScoreSubmitted(_score, msg.sender);
+    mapping(address => uint256) internal _scores;
+
+    constructor(address initialOwner) Ownable(initialOwner) {}
+
+    function incrementScore(address account, uint256 increment) public onlyOwner {
+        _scores[account] += increment;
+        emit ScoreIncremented(account, increment);
     }
 
-    function getScore(address _address) public view returns (uint256) {
-        return scores[_address];
+    function batchIncrementScore(address[] calldata accounts, uint256[] calldata increments) public onlyOwner {
+        if(accounts.length != increments.length) {
+            revert ArrayLengthMustBeEqual();
+        }
+        for(uint256 i = 0; i < accounts.length; ++i) {
+            _scores[accounts[i]] += increments[i];
+            emit ScoreIncremented(accounts[i], increments[i]);
+        }
+    }
+
+    function getScore(address account) public view returns (uint256) {
+        return _scores[account];
     }
 }

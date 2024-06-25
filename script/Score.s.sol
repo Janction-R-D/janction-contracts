@@ -1,12 +1,16 @@
 // SPDX-License-Identifier: UNLICENSED
 pragma solidity ^0.8.21;
 
-// import {Script, console2} from "forge-std/Script.sol";
+import "forge-std/Script.sol";
+import "../src/Score.sol";
 
-// contract CounterScript is Script {
-//     function setUp() public {}
+contract DeployScore is Script {
+    function run() external {
+        vm.startBroadcast();
 
-//     function run() public {
-//         vm.broadcast();
-//     }
-// }
+        address initialOwner = msg.sender;
+        Score score = new Score(initialOwner);
+
+        vm.stopBroadcast();
+    }
+}
