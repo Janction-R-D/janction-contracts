@@ -1,66 +1,29 @@
-## Foundry
+# Janction Score Contract
 
-**Foundry is a blazing fast, portable and modular toolkit for Ethereum application development written in Rust.**
+## Overview
 
-Foundry consists of:
+The Foundry Score smart contract allows for incrementing scores associated with Ethereum addresses. This contract is designed to be owned by an administrator (owner) who can manage scores across multiple accounts.
 
--   **Forge**: Ethereum testing framework (like Truffle, Hardhat and DappTools).
--   **Cast**: Swiss army knife for interacting with EVM smart contracts, sending transactions and getting chain data.
--   **Anvil**: Local Ethereum node, akin to Ganache, Hardhat Network.
--   **Chisel**: Fast, utilitarian, and verbose solidity REPL.
+## Features
 
-## Documentation
+- **Increment Score**: The owner can increase the score of a specific account.
+- **Batch Increment Score**: The owner can increase scores for multiple accounts in a single transaction.
+- **Get Score**: Retrieve the current score of any account.
 
-https://book.getfoundry.sh/
+## Requirements
 
-## Usage
+Solidity ^0.8.21
+OpenZeppelin Contracts (Ownable)
 
-### Build
-
-```shell
-$ forge build
+## Test
+```bash
+forge test
 ```
 
-### Test
+## Deployment
 
-```shell
-$ forge test
-```
-
-### Format
-
-```shell
-$ forge fmt
-```
-
-### Gas Snapshots
-
-```shell
-$ forge snapshot
-```
-
-### Anvil
-
-```shell
-$ anvil
-```
-
-### Deploy
-
-```shell
-$ forge script script/Counter.s.sol:CounterScript --rpc-url <your_rpc_url> --private-key <your_private_key>
-```
-
-### Cast
-
-```shell
-$ cast <subcommand>
-```
-
-### Help
-
-```shell
-$ forge --help
-$ anvil --help
-$ cast --help
+First, create the **.env** file and add your Ethereum RPC URL and private key.
+Then,
+```bash
+source .env && forge script script/DeployScore.s.sol --rpc-url op_sepolia --private-key $PRIVATE_KEY --broadcast
 ```
