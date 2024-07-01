@@ -75,4 +75,26 @@ contract ScoreTest is Test {
         vm.expectRevert(ArrayLengthMustBeEqual.selector);
         score.batchIncrementScore(accounts, scores);
     }
+
+    function testBatchIncrementScoreWithLargeArray() public {
+        uint256 maxArraySize = 1000; // Adjust this based on the first test result: 24715767
+
+        address[] memory accounts = new address[](maxArraySize);
+        uint256[] memory increments = new uint256[](maxArraySize);
+
+        for (uint256 i = 0; i < maxArraySize; i++) {
+            accounts[i] = address(uint160(i));
+            increments[i] = 100;
+        }
+
+        vm.startPrank(owner);
+        uint256 gasBefore = gasleft();
+        score.batchIncrementScore(accounts, increments);
+        uint256 gasAfter = gasleft();
+        uint256 gasUsed = gasBefore - gasAfter;
+
+        emit log_named_uint("Gas used for large array", gasUsed);
+
+        vm.stopPrank();
+    }
 }
