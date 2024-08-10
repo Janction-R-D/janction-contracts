@@ -1,8 +1,8 @@
 {
     "OP": {
-        "Score": "0x"
+        "Points": "0x"
     },
     "OP_SEPOLIA": {
-        "Score": "0x4be5136fE3E5c908183ec56A55C5A8fE6896faf2"
+        "Points": "0x76a4563aecA67D9e63231bFcA336667e068830ae"
     }
 }
