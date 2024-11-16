@@ -42,7 +42,7 @@ contract Payment is Ownable {
     /// @dev payee => payer's payment plan
     mapping(address => PayerPlan) public payerPlans;
 
-    constructor() Ownable(msg.sender) {}
+    constructor(address initialOwner) Ownable(initialOwner) {}
 
     function whitelistCurrency(
         address currency,
