@@ -13,14 +13,26 @@ contract Payment is Ownable {
         Quarter
     }
 
-    enum PaymentStatus {
-        Available,
-        Locked
+    enum ListingStatus {
+        NotList,
+        Listing
     }
 
-    struct PayerPlan {
-        PaymentStatus status;
-        address payer;  // payer address
+    enum RentalStatus {
+        NotRent,
+        Renting
+    }
+
+    struct Listing {
+        ListingStatus status;
+        address owner;
+        address currency;
+        uint256 baseAmount;
+    }
+
+    struct Rental {
+        RentalStatus status; 
+        address tenant; // tenant address
         address currency; // payment currency
         uint256 totalAmount; // Total one-time amount
         uint256 dailyAmount; // Daily payment amount
@@ -29,28 +41,26 @@ contract Payment is Ownable {
         uint256 totalDays; // Total days in the plan
     }
 
-    struct PayeeListing {
-        address currency;
-        uint256 baseAmount;
-    }
-
-    event PayeeListingCreated(
-        address indexed payee,
+    event List(
+        address indexed owner,
+        bytes32 indexed nodeId,
         address indexed currency,
         uint256 baseAmount
     );
 
-    event PayerPlanCreated(
-        address indexed payee,
-        address indexed payer,
+    event Rent(
+        address indexed owner,
+        bytes32 indexed nodeId,
+        address indexed tenant,
         uint256 totalDays,
         uint256 totalAmount,
         uint256 dailyAmount
     );
 
     event DailyPaymentReleased(
-        address indexed payee,
-        address indexed payer,
+        address indexed owner,
+        bytes32 indexed nodeId,
+        address indexed tenant,
         uint256 paidDays
     );
 
@@ -58,10 +68,10 @@ contract Payment is Ownable {
 
     /// @dev currency => is whitelisted
     mapping(address => bool) public isCurrencyWhitelisted;
-    /// @dev payee => listing
-    mapping(address => PayeeListing) public payeeListings;
-    /// @dev payee => payer's payment plan
-    mapping(address => PayerPlan) public payerPlans;
+    /// @dev owner => node_id => listings
+    mapping(address => mapping (bytes32 => Listing)) public listings;
+    /// @dev owner => node_id => rentals
+    mapping(address => mapping (bytes32 => Rental)) public rentals;
 
     constructor(address initialOwner) Ownable(initialOwner) {}
 
@@ -72,27 +82,41 @@ contract Payment is Ownable {
         isCurrencyWhitelisted[currency] = status;
     }
 
-    function createPayeeListing(address currency, uint256 baseAmount) external {
+    function list(bytes32 nodeId, address currency, uint256 baseAmount) external {
         require(isCurrencyWhitelisted[currency], "currency not whitelisted");
+        require(listings[msg.sender][nodeId].status == ListingStatus.NotList, "node has been listed");
 
-        payeeListings[msg.sender] = PayeeListing({
+        listings[msg.sender][nodeId] = Listing({
+            status: ListingStatus.Listing,
+            owner: msg.sender,
             currency: currency,
             baseAmount: baseAmount
         });
 
-        emit PayeeListingCreated(msg.sender, currency, baseAmount);
+        emit List(msg.sender, nodeId, currency, baseAmount);
     }
 
-    function createPayerPlan(address payee, Duration duration) external {
-        PayeeListing storage listing = payeeListings[payee];
-        PayerPlan storage plan = payerPlans[payee];
+    function delist(bytes32 nodeId) external {
+        require(rentals[msg.sender][nodeId].status == RentalStatus.Renting, "node has tenants");
+
+        listings[msg.sender][nodeId].status = ListingStatus.NotList;
+    }
+
+    function rent(address owner, bytes32 nodeId, Duration duration) external {
+        Listing storage listing = listings[owner][nodeId];
+        Rental storage rental = rentals[owner][nodeId];
 
         require(
-            plan.status == PaymentStatus.Available,
-            "payment status not available"
+            listing.status == ListingStatus.Listing,
+            "node not listing"
         );
 
-        uint256 totalAmount = getTotalAmount(payee, duration);
+        require(
+            rental.status == RentalStatus.NotRent,
+            "node has tenants"
+        );
+
+        uint256 totalAmount = getTotalAmount(owner, nodeId, duration);
         IERC20(listing.currency).safeTransferFrom(
             msg.sender,
             address(this),
@@ -102,9 +126,9 @@ contract Payment is Ownable {
         uint256 totalDays = _durationDays(duration);
         uint256 dailyAmount = totalAmount / totalDays;
 
-        payerPlans[payee] = PayerPlan({
-            status: PaymentStatus.Locked,
-            payer: msg.sender,
+        rentals[owner][nodeId] = Rental({
+            status: RentalStatus.Renting,
+            tenant: msg.sender,
             currency: listing.currency,
             totalAmount: totalAmount,
             dailyAmount: dailyAmount,
@@ -113,8 +137,9 @@ contract Payment is Ownable {
             totalDays: totalDays
         });
 
-        emit PayerPlanCreated(
-            payee,
+        emit Rent(
+            owner,
+            nodeId,
             msg.sender,
             totalDays,
             totalAmount,
@@ -122,48 +147,53 @@ contract Payment is Ownable {
         );
     }
 
-    function releaseDailyPayment(address payee) external {
-        PayerPlan storage plan = payerPlans[payee];
+    function releaseDailyPayment(address owner, bytes32 nodeId) external {
+        Rental storage rental = rentals[owner][nodeId];
 
-        require(plan.totalAmount > 0, "no payment plan found for this payee");
-        require(plan.paidDays < plan.totalDays, "all payments have been made");
+        require(rental.totalAmount > 0, "no payment rental found for this payee");
+        require(rental.paidDays < rental.totalDays, "all payments have been made");
 
-        uint256 lastReleaseAt = plan.startTime + plan.paidDays * 1 days;
+        uint256 lastReleaseAt = rental.startTime + rental.paidDays * 1 days;
         uint256 passedDays = (block.timestamp - lastReleaseAt) / 1 days;
 
         require(passedDays > 0, "not yet time for the next payment");
 
         // Determine the actual days to pay without exceeding totalDays
-        uint256 daysToPay = (plan.paidDays + passedDays > plan.totalDays)
-            ? plan.totalDays - plan.paidDays
+        uint256 daysToPay = (rental.paidDays + passedDays > rental.totalDays)
+            ? rental.totalDays - rental.paidDays
             : passedDays;
 
         // If this is the final payment, transfer the remaining balance to avoid overpayment
-        uint256 amountToTransfer = (plan.paidDays + daysToPay == plan.totalDays)
-            ? plan.totalAmount - plan.paidDays * plan.dailyAmount
-            : plan.dailyAmount * daysToPay;
+        uint256 amountToTransfer = (rental.paidDays + daysToPay == rental.totalDays)
+            ? rental.totalAmount - rental.paidDays * rental.dailyAmount
+            : rental.dailyAmount * daysToPay;
 
-        plan.paidDays += daysToPay;
+        rental.paidDays += daysToPay;
 
-        IERC20(plan.currency).safeTransfer(payee, amountToTransfer);
+        IERC20(rental.currency).safeTransfer(owner, amountToTransfer);
 
-        if (plan.paidDays == plan.totalDays) {
-            plan.status = PaymentStatus.Available;
+        if (rental.paidDays == rental.totalDays) {
+            rental.status = RentalStatus.NotRent;
         }
 
-        emit DailyPaymentReleased(
-            payee,
-            plan.payer,
-            plan.paidDays
-        );
+        emit DailyPaymentReleased(owner, nodeId, rental.tenant, rental.paidDays);
+    }
+
+    function getListing(address owner, bytes32 nodeId) public view returns (Listing memory) {
+        return listings[owner][nodeId];
+    }
+
+    function getRental(address owner, bytes32 nodeId) public view returns (Rental memory) {
+        return rentals[owner][nodeId];
     }
 
     function getTotalAmount(
-        address payee,
+        address owner,
+        bytes32 nodeId,
         Duration duration
     ) public view returns (uint256) {
         uint256 multiplier = _durationMultiplier(duration);
-        return multiplier * payeeListings[payee].baseAmount;
+        return multiplier * listings[owner][nodeId].baseAmount;
     }
 
     function _durationMultiplier(
