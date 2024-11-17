@@ -20,7 +20,8 @@ contract Payment is Ownable {
 
     struct PayerPlan {
         PaymentStatus status;
-        address currency;   // payment currency
+        address payer;  // payer address
+        address currency; // payment currency
         uint256 totalAmount; // Total one-time amount
         uint256 dailyAmount; // Daily payment amount
         uint256 startTime; // Start timestamp
@@ -32,6 +33,26 @@ contract Payment is Ownable {
         address currency;
         uint256 baseAmount;
     }
+
+    event PayeeListingCreated(
+        address indexed payee,
+        address indexed currency,
+        uint256 baseAmount
+    );
+
+    event PayerPlanCreated(
+        address indexed payee,
+        address indexed payer,
+        uint256 totalDays,
+        uint256 totalAmount,
+        uint256 dailyAmount
+    );
+
+    event DailyPaymentReleased(
+        address indexed payee,
+        address indexed payer,
+        uint256 paidDays
+    );
 
     using SafeERC20 for IERC20;
 
@@ -53,10 +74,13 @@ contract Payment is Ownable {
 
     function createPayeeListing(address currency, uint256 baseAmount) external {
         require(isCurrencyWhitelisted[currency], "currency not whitelisted");
+
         payeeListings[msg.sender] = PayeeListing({
             currency: currency,
             baseAmount: baseAmount
         });
+
+        emit PayeeListingCreated(msg.sender, currency, baseAmount);
     }
 
     function createPayerPlan(address payee, Duration duration) external {
@@ -80,6 +104,7 @@ contract Payment is Ownable {
 
         payerPlans[payee] = PayerPlan({
             status: PaymentStatus.Locked,
+            payer: msg.sender,
             currency: listing.currency,
             totalAmount: totalAmount,
             dailyAmount: dailyAmount,
@@ -87,6 +112,14 @@ contract Payment is Ownable {
             paidDays: 0,
             totalDays: totalDays
         });
+
+        emit PayerPlanCreated(
+            payee,
+            msg.sender,
+            totalDays,
+            totalAmount,
+            dailyAmount
+        );
     }
 
     function releaseDailyPayment(address payee) external {
@@ -117,6 +150,12 @@ contract Payment is Ownable {
         if (plan.paidDays == plan.totalDays) {
             plan.status = PaymentStatus.Available;
         }
+
+        emit DailyPaymentReleased(
+            payee,
+            plan.payer,
+            plan.paidDays
+        );
     }
 
     function getTotalAmount(
