@@ -4,6 +4,7 @@ pragma solidity ^0.8.21;
 import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
+import {IPriceOracle} from "./oracle/IPriceOracle.sol";
 
 contract Payment is Ownable {
     enum Duration {
@@ -26,7 +27,6 @@ contract Payment is Ownable {
     struct Listing {
         ListingStatus status;
         address owner;
-        address currency;
         uint256 baseAmount;
     }
 
@@ -44,7 +44,6 @@ contract Payment is Ownable {
     event List(
         address indexed owner,
         bytes32 indexed nodeId,
-        address indexed currency,
         uint256 baseAmount
     );
 
@@ -66,6 +65,8 @@ contract Payment is Ownable {
 
     using SafeERC20 for IERC20;
 
+    /// @dev currency => price oracle
+    mapping(address => IPriceOracle) public currencyPriceOracle;
     /// @dev currency => is whitelisted
     mapping(address => bool) public isCurrencyWhitelisted;
     /// @dev owner => node_id => listings
@@ -82,18 +83,20 @@ contract Payment is Ownable {
         isCurrencyWhitelisted[currency] = status;
     }
 
-    function list(bytes32 nodeId, address currency, uint256 baseAmount) external {
-        require(isCurrencyWhitelisted[currency], "currency not whitelisted");
+    function setPriceOracle(address currency, address oracle) external onlyOwner {
+        currencyPriceOracle[currency] = IPriceOracle(oracle);
+    }
+
+    function list(bytes32 nodeId, uint256 baseAmount) external {
         require(listings[msg.sender][nodeId].status == ListingStatus.NotList, "node has been listed");
 
         listings[msg.sender][nodeId] = Listing({
             status: ListingStatus.Listing,
             owner: msg.sender,
-            currency: currency,
             baseAmount: baseAmount
         });
 
-        emit List(msg.sender, nodeId, currency, baseAmount);
+        emit List(msg.sender, nodeId, baseAmount);
     }
 
     function delist(bytes32 nodeId) external {
@@ -102,7 +105,7 @@ contract Payment is Ownable {
         listings[msg.sender][nodeId].status = ListingStatus.NotList;
     }
 
-    function rent(address owner, bytes32 nodeId, Duration duration) external {
+    function rent(address owner, bytes32 nodeId, address currency, Duration duration) external {
         Listing storage listing = listings[owner][nodeId];
         Rental storage rental = rentals[owner][nodeId];
 
@@ -116,8 +119,10 @@ contract Payment is Ownable {
             "node has tenants"
         );
 
-        uint256 totalAmount = getTotalAmount(owner, nodeId, duration);
-        IERC20(listing.currency).safeTransferFrom(
+        require(isCurrencyWhitelisted[currency], "currency not whitelisted");
+
+        uint256 totalAmount = getTotalAmount(owner, nodeId, currency, duration);
+        IERC20(currency).safeTransferFrom(
             msg.sender,
             address(this),
             totalAmount
@@ -129,7 +134,7 @@ contract Payment is Ownable {
         rentals[owner][nodeId] = Rental({
             status: RentalStatus.Renting,
             tenant: msg.sender,
-            currency: listing.currency,
+            currency: currency,
             totalAmount: totalAmount,
             dailyAmount: dailyAmount,
             startTime: block.timestamp,
@@ -190,10 +195,13 @@ contract Payment is Ownable {
     function getTotalAmount(
         address owner,
         bytes32 nodeId,
+        address currency,
         Duration duration
     ) public view returns (uint256) {
         uint256 multiplier = _durationMultiplier(duration);
-        return multiplier * listings[owner][nodeId].baseAmount;
+        uint256 price = currencyPriceOracle[currency].getPrice();
+        uint256 decimals = currencyPriceOracle[currency].decimals();
+        return multiplier * listings[owner][nodeId].baseAmount * price / decimals;
     }
 
     function _durationMultiplier(

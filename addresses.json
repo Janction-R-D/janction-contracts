@@ -1,10 +1,15 @@
 {
-    "OP": {
-        "Points": "0x"
-    },
-    "OP_SEPOLIA": {
-        "Points": "0x76a4563aecA67D9e63231bFcA336667e068830ae",
-        "TestCurrency": "0x248f49674A9cc39E68615BD6669F5a395cbfa4D3",
-        "Payment": "0x4bcb4864a11c648830c917435d33422ba0201a3c"
-    }
+  "OP": {
+    "Points": "0x"
+  },
+  "OP_SEPOLIA": {
+    "Points": "0x76a4563aecA67D9e63231bFcA336667e068830ae",
+    "USDT": "0xCA181238E466Fd450AbCCFc8eaADECA3646e7b99",
+    "USDC": "0x1123904310D41b95e30747E9687Bb167eB370547",
+    "JCT": "0xa780e5799805eCF2c8aaebf551180F8109139B38",
+    "USDTPriceOracle": "0x31c876b373a9Dd35B164ba626c702E8BCdE58082",
+    "USDCPriceOracle": "0x9d7CB65110A02432423cE0775b09dfB66859baaF",
+    "JCTPriceOracle": "0xD9BeFA1c7da2891CAb652AB9f163340545177fbD",
+    "Payment": "0xE41D353610F8A346899F8Bf76Ff84f1FaA8B2887"
+  }
 }
