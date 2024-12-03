@@ -2,7 +2,7 @@
 pragma solidity ^0.8.21;
 
 import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
-import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {IPriceOracle} from "./oracle/IPriceOracle.sol";
 
@@ -31,7 +31,7 @@ contract Payment is Ownable {
     }
 
     struct Rental {
-        RentalStatus status; 
+        RentalStatus status;
         address tenant; // tenant address
         address currency; // payment currency
         uint256 totalAmount; // Total one-time amount
@@ -63,16 +63,17 @@ contract Payment is Ownable {
         uint256 paidDays
     );
 
-    using SafeERC20 for IERC20;
+    using SafeERC20 for ERC20;
 
+    uint256 private constant BASE_DECIMALS = 1e6; // same as USDT
     /// @dev currency => price oracle
     mapping(address => IPriceOracle) public currencyPriceOracle;
     /// @dev currency => is whitelisted
     mapping(address => bool) public isCurrencyWhitelisted;
     /// @dev owner => node_id => listings
-    mapping(address => mapping (bytes32 => Listing)) public listings;
+    mapping(address => mapping(bytes32 => Listing)) public listings;
     /// @dev owner => node_id => rentals
-    mapping(address => mapping (bytes32 => Rental)) public rentals;
+    mapping(address => mapping(bytes32 => Rental)) public rentals;
 
     constructor(address initialOwner) Ownable(initialOwner) {}
 
@@ -83,12 +84,18 @@ contract Payment is Ownable {
         isCurrencyWhitelisted[currency] = status;
     }
 
-    function setPriceOracle(address currency, address oracle) external onlyOwner {
+    function setPriceOracle(
+        address currency,
+        address oracle
+    ) external onlyOwner {
         currencyPriceOracle[currency] = IPriceOracle(oracle);
     }
 
     function list(bytes32 nodeId, uint256 baseAmount) external {
-        require(listings[msg.sender][nodeId].status == ListingStatus.NotList, "node has been listed");
+        require(
+            listings[msg.sender][nodeId].status == ListingStatus.NotList,
+            "node has been listed"
+        );
 
         listings[msg.sender][nodeId] = Listing({
             status: ListingStatus.Listing,
@@ -100,29 +107,31 @@ contract Payment is Ownable {
     }
 
     function delist(bytes32 nodeId) external {
-        require(rentals[msg.sender][nodeId].status == RentalStatus.Renting, "node has tenants");
+        require(
+            rentals[msg.sender][nodeId].status == RentalStatus.Renting,
+            "node has tenants"
+        );
 
         listings[msg.sender][nodeId].status = ListingStatus.NotList;
     }
 
-    function rent(address owner, bytes32 nodeId, address currency, Duration duration) external {
+    function rent(
+        address owner,
+        bytes32 nodeId,
+        address currency,
+        Duration duration
+    ) external {
         Listing storage listing = listings[owner][nodeId];
         Rental storage rental = rentals[owner][nodeId];
 
-        require(
-            listing.status == ListingStatus.Listing,
-            "node not listing"
-        );
+        require(listing.status == ListingStatus.Listing, "node not listing");
 
-        require(
-            rental.status == RentalStatus.NotRent,
-            "node has tenants"
-        );
+        require(rental.status == RentalStatus.NotRent, "node has tenants");
 
         require(isCurrencyWhitelisted[currency], "currency not whitelisted");
 
         uint256 totalAmount = getTotalAmount(owner, nodeId, currency, duration);
-        IERC20(currency).safeTransferFrom(
+        ERC20(currency).safeTransferFrom(
             msg.sender,
             address(this),
             totalAmount
@@ -155,8 +164,14 @@ contract Payment is Ownable {
     function releaseDailyPayment(address owner, bytes32 nodeId) external {
         Rental storage rental = rentals[owner][nodeId];
 
-        require(rental.totalAmount > 0, "no payment rental found for this payee");
-        require(rental.paidDays < rental.totalDays, "all payments have been made");
+        require(
+            rental.totalAmount > 0,
+            "no payment rental found for this payee"
+        );
+        require(
+            rental.paidDays < rental.totalDays,
+            "all payments have been made"
+        );
 
         uint256 lastReleaseAt = rental.startTime + rental.paidDays * 1 days;
         uint256 passedDays = (block.timestamp - lastReleaseAt) / 1 days;
@@ -169,26 +184,38 @@ contract Payment is Ownable {
             : passedDays;
 
         // If this is the final payment, transfer the remaining balance to avoid overpayment
-        uint256 amountToTransfer = (rental.paidDays + daysToPay == rental.totalDays)
+        uint256 amountToTransfer = (rental.paidDays + daysToPay ==
+            rental.totalDays)
             ? rental.totalAmount - rental.paidDays * rental.dailyAmount
             : rental.dailyAmount * daysToPay;
 
         rental.paidDays += daysToPay;
 
-        IERC20(rental.currency).safeTransfer(owner, amountToTransfer);
+        ERC20(rental.currency).safeTransfer(owner, amountToTransfer);
 
         if (rental.paidDays == rental.totalDays) {
             rental.status = RentalStatus.NotRent;
         }
 
-        emit DailyPaymentReleased(owner, nodeId, rental.tenant, rental.paidDays);
+        emit DailyPaymentReleased(
+            owner,
+            nodeId,
+            rental.tenant,
+            rental.paidDays
+        );
     }
 
-    function getListing(address owner, bytes32 nodeId) public view returns (Listing memory) {
+    function getListing(
+        address owner,
+        bytes32 nodeId
+    ) public view returns (Listing memory) {
         return listings[owner][nodeId];
     }
 
-    function getRental(address owner, bytes32 nodeId) public view returns (Rental memory) {
+    function getRental(
+        address owner,
+        bytes32 nodeId
+    ) public view returns (Rental memory) {
         return rentals[owner][nodeId];
     }
 
@@ -199,9 +226,14 @@ contract Payment is Ownable {
         Duration duration
     ) public view returns (uint256) {
         uint256 multiplier = _durationMultiplier(duration);
-        uint256 price = currencyPriceOracle[currency].getPrice();
-        uint256 decimals = currencyPriceOracle[currency].decimals();
-        return multiplier * listings[owner][nodeId].baseAmount * price / decimals;
+        uint256 priceAmount = currencyPriceOracle[currency].getPrice();
+        uint256 priceDecimals = currencyPriceOracle[currency].decimals();
+        uint256 currencyDecimals = ERC20(currency).decimals();
+        return
+            (multiplier *
+                listings[owner][nodeId].baseAmount *
+                currencyDecimals *
+                priceAmount) / (BASE_DECIMALS * priceDecimals);
     }
 
     function _durationMultiplier(
