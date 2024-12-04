@@ -2,110 +2,140 @@
 pragma solidity ^0.8.21;
 
 import "forge-std/Test.sol";
-import {Payment} from "../src/Payment.sol";
-import {TestCurrency} from "./mocks/TestCurrency.sol";
+import "../src/Payment.sol";
+import "./mocks/CurrencyMock.sol";
 
 contract PaymentTest is Test {
-    Payment payment;
-    TestCurrency usdt;
-    TestCurrency usdc;
-    TestCurrency jct;
-
-    address owner = address(0x1);
-    address tenant = address(0x2);
-
-    bytes32 nodeId = keccak256("testNode");
+    Payment public payment;
+    CurrencyMock public mockToken;
+    address public owner = address(1);
+    address public payer = address(2);
+    address public recipient = address(3);
 
     function setUp() public {
-        usdt = new TestCurrency("USDT", "USDT", 6);
-        usdc = new TestCurrency("USDC", "USDC", 6);
-        jct = new TestCurrency("ve JCT", "veJCT", 18);
-
+        vm.prank(owner);
         payment = new Payment(owner);
 
-        vm.prank(owner);
-        payment.whitelistCurrency(address(usdt), true);
-        vm.prank(owner);
-        payment.whitelistCurrency(address(usdc), true);
-        vm.prank(owner);
-        payment.whitelistCurrency(address(jct), true);
-    }
+        mockToken = new CurrencyMock("Currency Mock", "CM", 18);
+        mockToken.mint(payer, 1_000 ether);
 
-    function testListAndDelist() public {
-        // Simulate the owner listing a node with a base amount of 1000
-        vm.prank(owner);
-        payment.list(nodeId, 1000);
-
-        // Verify the listing details
-        Payment.Listing memory listing = payment.getListing(owner, nodeId);
-        assertEq(
-            uint256(listing.status),
-            uint256(Payment.ListingStatus.Listing)
-        );
-        assertEq(listing.owner, owner);
-        assertEq(listing.baseAmount, 1000);
-
-        // Simulate the owner delisting the node
-        vm.prank(owner);
-        payment.delist(nodeId);
-
-        // Verify the node is delisted
-        listing = payment.getListing(owner, nodeId);
-        assertEq(
-            uint256(listing.status),
-            uint256(Payment.ListingStatus.NotList)
-        );
-    }
-
-    function testRentAndReleasePayment() public {
-        // Simulate the owner listing a node
-        vm.prank(owner);
-        payment.list(nodeId, 1000);
-
-        uint256 totalAmount = 3000; // Total payment amount
-        uint256 totalDays = 3; // Total rental days
-        uint256 dailyAmount = totalAmount / totalDays;
-
-        // Simulate the tenant renting the node
-        usdt.mint(tenant, totalAmount); // Mint sufficient USDT for the tenant
-        vm.startPrank(tenant);
-        usdt.approve(address(payment), totalAmount); // Approve the payment
-        payment.rent(owner, nodeId, address(usdt), totalAmount, totalDays);
+        vm.startPrank(owner);
+        payment.whitelistCurrency(address(mockToken), true);
         vm.stopPrank();
+    }
 
-        // Verify the rental details
-        Payment.Rental memory rental = payment.getRental(owner, nodeId);
-        assertEq(uint256(rental.status), uint256(Payment.RentalStatus.Renting));
-        assertEq(rental.tenant, tenant);
-        assertEq(rental.totalAmount, totalAmount);
-        assertEq(rental.dailyAmount, dailyAmount);
+    function testWhitelistCurrency() public {
+        vm.prank(owner);
+        payment.whitelistCurrency(address(mockToken), false);
+        assertFalse(payment.isCurrencyWhitelisted(address(mockToken)));
 
-        // Fast forward 1 day and release the first daily payment
+        vm.prank(owner);
+        payment.whitelistCurrency(address(mockToken), true);
+        assertTrue(payment.isCurrencyWhitelisted(address(mockToken)));
+    }
+
+    function testCreatePaymentPlan() public {
+        uint256 totalAmount = 100 ether;
+        uint256 totalDays = 10;
+
+        vm.startPrank(payer);
+        mockToken.approve(address(payment), totalAmount);
+
+        payment.createPaymentPlan(payer, recipient, address(mockToken), totalAmount, totalDays);
+
+        bytes32 paymentId = keccak256(abi.encodePacked(payer, recipient, uint256(0)));
+        Payment.PaymentPlan memory plan = payment.getPaymentPlan(paymentId);
+
+        assertEq(plan.payer, payer);
+        assertEq(plan.recipient, recipient);
+        assertEq(plan.currency, address(mockToken));
+        assertEq(plan.totalAmount, totalAmount);
+        assertEq(plan.dailyAmount, totalAmount / totalDays);
+        assertEq(plan.totalDays, totalDays);
+        assertEq(plan.paidDays, 0);
+        assertEq(plan.startTime, block.timestamp);
+
+        vm.stopPrank();
+    }
+
+    function testReleaseDailyPayment() public {
+        uint256 totalAmount = 100 ether;
+        uint256 totalDays = 10;
+
+        vm.startPrank(payer);
+        mockToken.approve(address(payment), totalAmount);
+
+        payment.createPaymentPlan(payer, recipient, address(mockToken), totalAmount, totalDays);
+
+        bytes32 paymentId = keccak256(abi.encodePacked(payer, recipient, uint256(0)));
+
+        // Advance 1 day
         vm.warp(block.timestamp + 1 days);
-        vm.prank(tenant);
-        payment.releaseDailyPayment(owner, nodeId);
 
-        rental = payment.getRental(owner, nodeId);
-        assertEq(rental.paidDays, 1); // Verify 1 day of payment has been made
-        assertEq(usdt.balanceOf(owner), dailyAmount); // Verify owner received payment for 1 day
+        payment.releaseDailyPayment(paymentId);
 
-        // Fast forward another day and release the second daily payment
+        Payment.PaymentPlan memory plan = payment.getPaymentPlan(paymentId);
+        assertEq(plan.paidDays, 1);
+        assertEq(mockToken.balanceOf(recipient), totalAmount / totalDays);
+
+        // Advance another day and release again
         vm.warp(block.timestamp + 1 days);
-        vm.prank(tenant);
-        payment.releaseDailyPayment(owner, nodeId);
 
-        rental = payment.getRental(owner, nodeId);
-        assertEq(rental.paidDays, 2); // Verify 2 days of payment have been made
-        assertEq(usdt.balanceOf(owner), dailyAmount * 2); // Verify owner received payment for 2 days
+        payment.releaseDailyPayment(paymentId);
 
-        // Fast forward to the third day and release the final payment
-        vm.warp(block.timestamp + 1 days);
-        vm.prank(tenant);
-        payment.releaseDailyPayment(owner, nodeId);
+        plan = payment.getPaymentPlan(paymentId);
+        assertEq(plan.paidDays, 2);
+        assertEq(mockToken.balanceOf(recipient), 2 * (totalAmount / totalDays));
 
-        rental = payment.getRental(owner, nodeId);
-        assertEq(uint256(rental.status), uint256(Payment.RentalStatus.NotRent)); // Verify rental is complete
-        assertEq(rental.paidDays, totalDays); // Verify all days have been paid
-        assertEq(usdt.balanceOf(owner), totalAmount); // Verify owner received the total payment
+        vm.stopPrank();
+    }
+
+    function testReleaseFinalPayment() public {
+        uint256 totalAmount = 100 ether;
+        uint256 totalDays = 10;
+
+        vm.startPrank(payer);
+        mockToken.approve(address(payment), totalAmount);
+
+        payment.createPaymentPlan(payer, recipient, address(mockToken), totalAmount, totalDays);
+
+        bytes32 paymentId = keccak256(abi.encodePacked(payer, recipient, uint256(0)));
+
+        // Warp to the last payment day
+        vm.warp(block.timestamp + totalDays * 1 days);
+
+        payment.releaseDailyPayment(paymentId);
+
+        Payment.PaymentPlan memory plan = payment.getPaymentPlan(paymentId);
+        assertEq(plan.paidDays, totalDays);
+        assertEq(mockToken.balanceOf(recipient), totalAmount);
+
+        vm.stopPrank();
+    }
+
+    function testCannotCreatePlanWithNonWhitelistedCurrency() public {
+        address unwhitelistedToken = address(0xDEAD);
+
+        vm.startPrank(payer);
+        vm.expectRevert("currency not whitelisted");
+        payment.createPaymentPlan(payer, recipient, unwhitelistedToken, 100 ether, 10);
+        vm.stopPrank();
+    }
+
+    function testCannotReleaseBeforeTime() public {
+        uint256 totalAmount = 100 ether;
+        uint256 totalDays = 10;
+
+        vm.startPrank(payer);
+        mockToken.approve(address(payment), totalAmount);
+
+        payment.createPaymentPlan(payer, recipient, address(mockToken), totalAmount, totalDays);
+
+        bytes32 paymentId = keccak256(abi.encodePacked(payer, recipient, uint256(0)));
+
+        vm.expectRevert("not yet time for the next payment");
+        payment.releaseDailyPayment(paymentId);
+
+        vm.stopPrank();
     }
 }
