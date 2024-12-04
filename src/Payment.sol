@@ -4,16 +4,8 @@ pragma solidity ^0.8.21;
 import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
-import {IPriceOracle} from "./oracle/IPriceOracle.sol";
 
 contract Payment is Ownable {
-    enum Duration {
-        Day,
-        Week,
-        Month,
-        Quarter
-    }
-
     enum ListingStatus {
         NotList,
         Listing
@@ -65,9 +57,6 @@ contract Payment is Ownable {
 
     using SafeERC20 for ERC20;
 
-    uint256 private constant BASE_DECIMALS = 1e6; // same as USDT
-    /// @dev currency => price oracle
-    mapping(address => IPriceOracle) public currencyPriceOracle;
     /// @dev currency => is whitelisted
     mapping(address => bool) public isCurrencyWhitelisted;
     /// @dev owner => node_id => listings
@@ -82,13 +71,6 @@ contract Payment is Ownable {
         bool status
     ) external onlyOwner {
         isCurrencyWhitelisted[currency] = status;
-    }
-
-    function setPriceOracle(
-        address currency,
-        address oracle
-    ) external onlyOwner {
-        currencyPriceOracle[currency] = IPriceOracle(oracle);
     }
 
     function list(bytes32 nodeId, uint256 baseAmount) external {
@@ -108,8 +90,8 @@ contract Payment is Ownable {
 
     function delist(bytes32 nodeId) external {
         require(
-            rentals[msg.sender][nodeId].status == RentalStatus.Renting,
-            "node has tenants"
+            rentals[msg.sender][nodeId].status == RentalStatus.NotRent,
+            "node has tenant"
         );
 
         listings[msg.sender][nodeId].status = ListingStatus.NotList;
@@ -119,25 +101,24 @@ contract Payment is Ownable {
         address owner,
         bytes32 nodeId,
         address currency,
-        Duration duration
+        uint256 totalAmount,
+        uint256 totalDays
     ) external {
         Listing storage listing = listings[owner][nodeId];
         Rental storage rental = rentals[owner][nodeId];
 
         require(listing.status == ListingStatus.Listing, "node not listing");
 
-        require(rental.status == RentalStatus.NotRent, "node has tenants");
+        require(rental.status == RentalStatus.NotRent, "node has tenant");
 
         require(isCurrencyWhitelisted[currency], "currency not whitelisted");
 
-        uint256 totalAmount = getTotalAmount(owner, nodeId, currency, duration);
         ERC20(currency).safeTransferFrom(
             msg.sender,
             address(this),
             totalAmount
         );
 
-        uint256 totalDays = _durationDays(duration);
         uint256 dailyAmount = totalAmount / totalDays;
 
         rentals[owner][nodeId] = Rental({
@@ -217,52 +198,5 @@ contract Payment is Ownable {
         bytes32 nodeId
     ) public view returns (Rental memory) {
         return rentals[owner][nodeId];
-    }
-
-    function getTotalAmount(
-        address owner,
-        bytes32 nodeId,
-        address currency,
-        Duration duration
-    ) public view returns (uint256) {
-        uint256 multiplier = _durationMultiplier(duration);
-        uint256 priceAmount = currencyPriceOracle[currency].getPrice();
-        uint256 priceDecimals = currencyPriceOracle[currency].decimals();
-        uint256 currencyDecimals = ERC20(currency).decimals();
-        return
-            (multiplier *
-                listings[owner][nodeId].baseAmount *
-                currencyDecimals *
-                priceAmount) / (BASE_DECIMALS * priceDecimals);
-    }
-
-    function _durationMultiplier(
-        Duration duration
-    ) internal pure returns (uint256) {
-        if (duration == Duration.Day) {
-            return 1;
-        } else if (duration == Duration.Week) {
-            return 6;
-        } else if (duration == Duration.Month) {
-            return 25;
-        } else if (duration == Duration.Quarter) {
-            return 70;
-        } else {
-            revert("invalid duration");
-        }
-    }
-
-    function _durationDays(Duration duration) internal pure returns (uint256) {
-        if (duration == Duration.Day) {
-            return 1;
-        } else if (duration == Duration.Week) {
-            return 7;
-        } else if (duration == Duration.Month) {
-            return 30;
-        } else if (duration == Duration.Quarter) {
-            return 120;
-        } else {
-            revert("invalid duration");
-        }
     }
 }
