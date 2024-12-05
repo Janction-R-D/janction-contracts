@@ -7,8 +7,9 @@ import "../src/JanctionNFT.sol";
 contract JanctionNFTTest is Test {
     JanctionNFT public nft;
     address public owner = address(1);
-    address public whitelisted = address(2);
-    address public notWhitelisted = address(3);
+    address public whitelisted1 = address(2);
+    address public whitelisted2 = address(3);
+    address public notWhitelisted = address(4);
 
     function setUp() public {
         vm.startPrank(owner);
@@ -19,23 +20,47 @@ contract JanctionNFTTest is Test {
     function testWhitelist() public {
         vm.startPrank(notWhitelisted);
         vm.expectRevert("not whitelisted");
-        nft.mint(1);
+        nft.mint();
         vm.stopPrank();
 
         vm.startPrank(owner);
-        nft.whitelist(whitelisted, true);
-        assertEq(nft.isWhitelisted(whitelisted), true); 
+        nft.whitelist(whitelisted1, true);
+        assertEq(nft.isWhitelisted(whitelisted1), true); 
+        nft.whitelist(whitelisted2, true);
+        assertEq(nft.isWhitelisted(whitelisted2), true); 
         vm.stopPrank();
     }
 
     function testMint() public {
         vm.startPrank(owner);
-        nft.whitelist(whitelisted, true);
+        nft.whitelist(whitelisted1, true);
+        nft.whitelist(whitelisted2, true);
         vm.stopPrank();
 
-        vm.startPrank(whitelisted);
-        nft.mint(1);
-        assertEq(nft.ownerOf(1), whitelisted); 
+        vm.startPrank(whitelisted1);
+        nft.mint();
+        assertEq(nft.ownerOf(1), whitelisted1); 
+        vm.stopPrank();
+
+        vm.startPrank(whitelisted2);
+        nft.mint();
+        assertEq(nft.ownerOf(2), whitelisted2); 
+        vm.stopPrank();
+    }
+
+    function testRevertWhenDoubleMint() public {
+        vm.startPrank(owner);
+        nft.whitelist(whitelisted1, true);
+        vm.stopPrank();
+
+        vm.startPrank(whitelisted1);
+        nft.mint();
+        assertEq(nft.ownerOf(1), whitelisted1); 
+        vm.stopPrank();
+
+        vm.startPrank(whitelisted1);
+        vm.expectRevert("not whitelisted");
+        nft.mint();
         vm.stopPrank();
     }
 
@@ -46,11 +71,11 @@ contract JanctionNFTTest is Test {
         vm.stopPrank();
 
         vm.startPrank(owner);
-        nft.whitelist(whitelisted, true);
-        vm.startPrank(whitelisted);
-        nft.mint(100);
+        nft.whitelist(whitelisted1, true);
+        vm.startPrank(whitelisted1);
+        nft.mint();
 
-        assertEq(nft.tokenURI(100), "https://api.example.com/metadata/100"); 
+        assertEq(nft.tokenURI(1), "https://api.example.com/metadata/1"); 
     }
 
     function testOnlyOwnerFunctions() public {
