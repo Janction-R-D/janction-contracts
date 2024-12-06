@@ -5,39 +5,45 @@ import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 import {ERC721} from "@openzeppelin/contracts/token/ERC721/ERC721.sol";
 
 contract JanctionNFT is ERC721, Ownable {
-    event Whitelisted(address indexed to, bool indexed value);
+    uint256 public MAX_SUPPLY;
 
-    uint256 internal _tokenIdCount = 1;
+    uint256 internal _currentTokenId = 1;
     string internal _baseUri;
-    mapping(address => bool) public isWhitelisted;
 
     constructor(
         string memory name,
         string memory symbol,
-        address initialOwner
-    ) ERC721(name, symbol) Ownable(initialOwner) {}
-
-    modifier onlyWhitelisted {
-        require(isWhitelisted[msg.sender], "not whitelisted");
-        _;
+        address initialOwner,
+        uint256 maxSupply,
+        string memory baseUri
+    ) ERC721(name, symbol) Ownable(initialOwner) {
+        MAX_SUPPLY = maxSupply;
+        _baseUri = baseUri;
     }
 
-    function whitelist(address to, bool value) public onlyOwner {
-        _whitelist(to, value);
+    function setMaxSupply(uint256 maxSupply) public onlyOwner {
+        require(maxSupply > totalSupply(), "invalid max supply");
+        MAX_SUPPLY = maxSupply;
     }
 
     function setBaseUri(string memory baseUri) public onlyOwner {
         _baseUri = baseUri;
     }
 
-    function mint() public onlyWhitelisted {
-        _whitelist(msg.sender, false);
-        _mint(msg.sender, _tokenIdCount++);
+    function mint(address to) public onlyOwner {
+        require(_currentTokenId <= MAX_SUPPLY, "exceeds max supply");
+        _mint(to, _currentTokenId++);
     }
 
-    function _whitelist(address to, bool value) internal {
-        isWhitelisted[to] = value;
-        emit Whitelisted(to, value);
+    function batchMint(address[] memory tos) public onlyOwner {
+        require(_currentTokenId + tos.length -1 <= MAX_SUPPLY, "exceeds max supply");
+        for(uint256 i = 0; i < tos.length; i++) {
+            _mint(tos[i], _currentTokenId++);
+        }
+    }
+
+    function totalSupply() public view returns (uint256) {
+        return _currentTokenId - 1;
     }
 
     function _baseURI() internal view virtual override returns (string memory) {

@@ -9,7 +9,7 @@ contract DeployPoints is Script {
     address deployer = vm.addr(deployerPrivateKey);
 
     function run() external {
-        vm.startBroadcast();
+        vm.startBroadcast(deployerPrivateKey);
 
         address initialOwner = deployer;
         new Points(initialOwner);
