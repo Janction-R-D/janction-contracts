@@ -10,7 +10,7 @@ contract Payment is Ownable {
         address payer; // payer address
         address recipient; // recipient address
         address currency; // payment currency
-        uint256 totalAmount; // Total one-time amount
+        uint256 amount; // Total one-time amount
         uint256 dailyAmount; // Daily payment amount
         uint256 startTime; // Start timestamp
         uint256 paidDays; // Days already paid
@@ -23,7 +23,7 @@ contract Payment is Ownable {
         address indexed recipient,
         address currency,
         uint256 totalDays,
-        uint256 totalAmount,
+        uint256 amount,
         uint256 dailyAmount
     );
 
@@ -61,7 +61,9 @@ contract Payment is Ownable {
         address recipient,
         address currency,
         uint256 totalAmount,
-        uint256 totalDays
+        uint256 totalDays,
+        address[] memory beneficiaries,
+        uint256[] memory rewards
     ) external {
         require(isCurrencyWhitelisted[currency], "currency not whitelisted");
 
@@ -69,20 +71,31 @@ contract Payment is Ownable {
             abi.encodePacked(payer, recipient, _nonces[payer]++)
         );
 
+        uint256 remainingAmount = totalAmount;
+
+        for(uint256 i = 0; i < beneficiaries.length; i++) {
+            IERC20(currency).safeTransferFrom(
+                msg.sender,
+                beneficiaries[i],
+                rewards[i]
+            );
+            remainingAmount -= rewards[i];
+        }
+
         IERC20(currency).safeTransferFrom(
             msg.sender,
             address(this),
-            totalAmount
+            remainingAmount
         );
 
-        uint256 dailyAmount = totalAmount / totalDays;
+        uint256 dailyAmount = remainingAmount / totalDays;
         require(dailyAmount > 0, "invalid daily release amount");
 
         _paymentPlans[paymentId] = PaymentPlan({
             payer: payer,
             recipient: recipient,
             currency: currency,
-            totalAmount: totalAmount,
+            amount: remainingAmount,
             dailyAmount: dailyAmount,
             startTime: block.timestamp,
             paidDays: 0,
@@ -95,7 +108,7 @@ contract Payment is Ownable {
             recipient,
             currency,
             totalDays,
-            totalAmount,
+            remainingAmount,
             dailyAmount
         );
     }
@@ -103,7 +116,7 @@ contract Payment is Ownable {
     function releaseDailyPayment(bytes32 paymentId) external {
         PaymentPlan storage plan = _paymentPlans[paymentId];
 
-        require(plan.totalAmount > 0, "no payment plan found");
+        require(plan.amount > 0, "no payment plan found");
         require(plan.paidDays < plan.totalDays, "all payments have been made");
 
         uint256 lastReleaseAt = plan.startTime + plan.paidDays * 1 days;
@@ -118,7 +131,7 @@ contract Payment is Ownable {
 
         // If this is the final payment, transfer the remaining balance to avoid overpayment
         uint256 amountToTransfer = (plan.paidDays + daysToPay == plan.totalDays)
-            ? plan.totalAmount - plan.paidDays * plan.dailyAmount
+            ? plan.amount - plan.paidDays * plan.dailyAmount
             : plan.dailyAmount * daysToPay;
 
         plan.paidDays += daysToPay;

@@ -38,10 +38,13 @@ contract PaymentTest is Test {
         uint256 totalAmount = 100 ether;
         uint256 totalDays = 10;
 
+        address[] memory beneficiaries = new address[](0);
+        uint256[] memory rewards = new uint256[](0);
+
         vm.startPrank(payer);
         mockToken.approve(address(payment), totalAmount);
 
-        payment.createPaymentPlan(payer, recipient, address(mockToken), totalAmount, totalDays);
+        payment.createPaymentPlan(payer, recipient, address(mockToken), totalAmount, totalDays, beneficiaries, rewards);
 
         bytes32 paymentId = keccak256(abi.encodePacked(payer, recipient, uint256(0)));
         Payment.PaymentPlan memory plan = payment.getPaymentPlan(paymentId);
@@ -49,8 +52,41 @@ contract PaymentTest is Test {
         assertEq(plan.payer, payer);
         assertEq(plan.recipient, recipient);
         assertEq(plan.currency, address(mockToken));
-        assertEq(plan.totalAmount, totalAmount);
+        assertEq(plan.amount, totalAmount);
         assertEq(plan.dailyAmount, totalAmount / totalDays);
+        assertEq(plan.totalDays, totalDays);
+        assertEq(plan.paidDays, 0);
+        assertEq(plan.startTime, block.timestamp);
+
+        vm.stopPrank();
+    }
+
+    function testCreatePaymentPlanWithBeneficiaries() public {
+        uint256 totalAmount = 100 ether;
+        uint256 totalDays = 10;
+
+        address[] memory beneficiaries = new address[](1);
+        uint256[] memory rewards = new uint256[](1);
+
+        beneficiaries[0] = address(100);
+        rewards[0] = 1 ether;
+
+        uint256 remainingAmount = totalAmount - rewards[0];
+        assertEq(remainingAmount, 99 ether);
+
+        vm.startPrank(payer);
+        mockToken.approve(address(payment), totalAmount);
+
+        payment.createPaymentPlan(payer, recipient, address(mockToken), totalAmount, totalDays, beneficiaries, rewards);
+
+        bytes32 paymentId = keccak256(abi.encodePacked(payer, recipient, uint256(0)));
+        Payment.PaymentPlan memory plan = payment.getPaymentPlan(paymentId);
+
+        assertEq(plan.payer, payer);
+        assertEq(plan.recipient, recipient);
+        assertEq(plan.currency, address(mockToken));
+        assertEq(plan.amount, remainingAmount);
+        assertEq(plan.dailyAmount, remainingAmount / totalDays);
         assertEq(plan.totalDays, totalDays);
         assertEq(plan.paidDays, 0);
         assertEq(plan.startTime, block.timestamp);
@@ -62,10 +98,13 @@ contract PaymentTest is Test {
         uint256 totalAmount = 100 ether;
         uint256 totalDays = 10;
 
+        address[] memory beneficiaries = new address[](0);
+        uint256[] memory rewards = new uint256[](0);
+
         vm.startPrank(payer);
         mockToken.approve(address(payment), totalAmount);
 
-        payment.createPaymentPlan(payer, recipient, address(mockToken), totalAmount, totalDays);
+        payment.createPaymentPlan(payer, recipient, address(mockToken), totalAmount, totalDays, beneficiaries, rewards);
 
         bytes32 paymentId = keccak256(abi.encodePacked(payer, recipient, uint256(0)));
 
@@ -94,10 +133,13 @@ contract PaymentTest is Test {
         uint256 totalAmount = 100 ether;
         uint256 totalDays = 10;
 
+        address[] memory beneficiaries = new address[](0);
+        uint256[] memory rewards = new uint256[](0);
+
         vm.startPrank(payer);
         mockToken.approve(address(payment), totalAmount);
 
-        payment.createPaymentPlan(payer, recipient, address(mockToken), totalAmount, totalDays);
+        payment.createPaymentPlan(payer, recipient, address(mockToken), totalAmount, totalDays, beneficiaries, rewards);
 
         bytes32 paymentId = keccak256(abi.encodePacked(payer, recipient, uint256(0)));
 
@@ -116,9 +158,12 @@ contract PaymentTest is Test {
     function testCannotCreatePlanWithNonWhitelistedCurrency() public {
         address unwhitelistedToken = address(0xDEAD);
 
+        address[] memory beneficiaries = new address[](0);
+        uint256[] memory rewards = new uint256[](0);
+
         vm.startPrank(payer);
         vm.expectRevert("currency not whitelisted");
-        payment.createPaymentPlan(payer, recipient, unwhitelistedToken, 100 ether, 10);
+        payment.createPaymentPlan(payer, recipient, unwhitelistedToken, 100 ether, 10, beneficiaries, rewards);
         vm.stopPrank();
     }
 
@@ -126,10 +171,13 @@ contract PaymentTest is Test {
         uint256 totalAmount = 100 ether;
         uint256 totalDays = 10;
 
+        address[] memory beneficiaries = new address[](0);
+        uint256[] memory rewards = new uint256[](0);
+
         vm.startPrank(payer);
         mockToken.approve(address(payment), totalAmount);
 
-        payment.createPaymentPlan(payer, recipient, address(mockToken), totalAmount, totalDays);
+        payment.createPaymentPlan(payer, recipient, address(mockToken), totalAmount, totalDays, beneficiaries, rewards);
 
         bytes32 paymentId = keccak256(abi.encodePacked(payer, recipient, uint256(0)));
 
