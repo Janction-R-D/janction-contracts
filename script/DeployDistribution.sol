@@ -13,7 +13,8 @@ contract DeployDistribution is Script {
         vm.startBroadcast(deployerPrivateKey);
 
         address initialOwner = deployer;
-        Distribution distribution = new Distribution(initialOwner);
+        address initialTreasury = deployer;
+        Distribution distribution = new Distribution(initialOwner, initialTreasury);
 
         CurrencyMock usdt = CurrencyMock(0xCA181238E466Fd450AbCCFc8eaADECA3646e7b99);
         CurrencyMock usdc = CurrencyMock(0x1123904310D41b95e30747E9687Bb167eB370547);
