@@ -5,7 +5,7 @@ import "forge-std/Script.sol";
 import "../src/JanctionNFT.sol";
 
 contract SetBaseUri is Script {
-    JanctionNFT nft = JanctionNFT(0x6f899dA8D3d9De3A910Ee38773444B757D1Cf197);
+    JanctionNFT nft = JanctionNFT(0x437ec4194ee2EFdBF326fD16ebaa29418CF8c451);
     uint256 signerPrivateKey = vm.envUint("PRIVATE_KEY");
     address signer = vm.addr(signerPrivateKey);
     string baseUri = "https://pub-da89859eb37b4af0ab4fbec6b5247ec5.r2.dev/";
