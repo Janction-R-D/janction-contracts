@@ -5,8 +5,9 @@ import {Ownable} from "openzeppelin-contracts/contracts/access/Ownable.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {EIP712} from "@openzeppelin/contracts/utils/cryptography/EIP712.sol";
+import {Pausable} from "@openzeppelin/contracts/utils/Pausable.sol";
 
-contract JasmyRewards is Ownable, EIP712 {
+contract JasmyRewards is Ownable, EIP712, Pausable {
     using SafeERC20 for IERC20;
 
     struct EIP712Signature {
@@ -24,21 +25,25 @@ contract JasmyRewards is Ownable, EIP712 {
     );
     event RewardsDistributed(address indexed account, uint256 rewards);
 
-    address public JASMY;
-
     bytes32 public constant DISTRIBUTE_REWARDS_TYPEHASH =
         keccak256(
             bytes(
-                "DistributeRewards(uint256 rewards,uint256 nonce,uint256 deadline)"
+                "DistributeRewards(address receiver,uint256 rewards,uint256 nonce,uint256 deadline)"
             )
         );
+
+    address internal _administrator;
+
+    address public JASMY;
 
     mapping(address => uint256) internal _sigNonces;
 
     constructor(
         address initialOwner,
+        address administrator,
         address jasmy
     ) Ownable(initialOwner) EIP712("JasmyRewards", "1") {
+        _administrator = administrator;
         JASMY = jasmy;
     }
 
@@ -48,6 +53,10 @@ contract JasmyRewards is Ownable, EIP712 {
 
     function getSigNonce(address user) public view returns (uint256) {
         return _sigNonces[user];
+    }
+
+    function setAdministrator(address administrator) public onlyOwner {
+        _administrator = administrator;
     }
 
     function setJasmy(address jasmy) public onlyOwner {
@@ -67,17 +76,28 @@ contract JasmyRewards is Ownable, EIP712 {
         emit Withdrawed(to, currency, amount);
     }
 
+    function pause() public onlyOwner {
+        _pause();
+    }
+
+    function unpause() public onlyOwner {
+        _unpause();
+    }
+
     function distributeRewards(
         EIP712Signature memory signature,
         uint256 rewards
-    ) public onlyOwner {
+    ) public whenNotPaused {
+        address receiver = msg.sender;
+
         address recoveredAddr = _recoverEIP712Signer(
             _hashTypedDataV4(
                 keccak256(
                     abi.encode(
                         DISTRIBUTE_REWARDS_TYPEHASH,
+                        receiver,
                         rewards,
-                        _sigNonces[signature.signer]++,
+                        _sigNonces[receiver]++,
                         signature.deadline
                     )
                 )
@@ -87,9 +107,11 @@ contract JasmyRewards is Ownable, EIP712 {
 
         require(signature.signer == recoveredAddr, "signature mismatch");
 
-        IERC20(JASMY).safeTransfer(recoveredAddr, rewards);
+        require(signature.signer == _administrator, "signature not from administrator");
 
-        emit RewardsDistributed(recoveredAddr, rewards);
+        IERC20(JASMY).safeTransfer(receiver, rewards);
+
+        emit RewardsDistributed(receiver, rewards);
     }
 
     function _recoverEIP712Signer(

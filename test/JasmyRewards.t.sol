@@ -7,10 +7,14 @@ import {CurrencyMock} from "./mocks/CurrencyMock.sol";
 import {EIP712} from "@openzeppelin/contracts/utils/cryptography/EIP712.sol";
 
 contract JasmyRewardsTest is Test, EIP712 {
+    error EnforcedPause();
+
     JasmyRewards private jasmyRewards;
     CurrencyMock private jasmyToken;
 
-    address private owner = address(0x1);
+    address private owner;
+    address private administrator;
+    uint256 private administratorPK;
     address private user1;
     uint256 private user1PK;
     address private user2;
@@ -19,15 +23,72 @@ contract JasmyRewardsTest is Test, EIP712 {
     constructor() EIP712("", "") {}
 
     function setUp() public {
+        owner = makeAddr("owner");
+        (administrator, administratorPK) = makeAddrAndKey("administrator");
         (user1, user1PK) = makeAddrAndKey("user1");
         (user2, user2PK) = makeAddrAndKey("user2");
 
         jasmyToken = new CurrencyMock("JasmyToken", "JASMY", 18);
 
-        vm.prank(owner);
-        jasmyRewards = new JasmyRewards(owner, address(jasmyToken));
+        jasmyRewards = new JasmyRewards(
+            owner,
+            administrator,
+            address(jasmyToken)
+        );
 
         jasmyToken.mint(address(jasmyRewards), 1_000_000 ether);
+    }
+
+    function testPauseAndUnpause() public {
+        vm.prank(owner);
+        jasmyRewards.pause();
+
+        uint256 nonce = jasmyRewards.getSigNonce(user1);
+        uint256 deadline = block.timestamp + 1 hours;
+        uint256 rewards = 100 ether;
+
+        bytes32 hashedMessage = keccak256(
+            abi.encode(
+                jasmyRewards.DISTRIBUTE_REWARDS_TYPEHASH(),
+                user1,
+                rewards,
+                nonce,
+                deadline
+            )
+        );
+
+        bytes32 domainSeparator = jasmyRewards.getDomainSeparator();
+
+        bytes32 digest = _calculateEIP712Digest(domainSeparator, hashedMessage);
+        (uint8 v, bytes32 r, bytes32 s) = vm.sign(administratorPK, digest);
+
+        JasmyRewards.EIP712Signature memory signature = JasmyRewards
+            .EIP712Signature({
+                signer: administrator,
+                v: v,
+                r: r,
+                s: s,
+                deadline: deadline
+            });
+
+        vm.expectRevert(EnforcedPause.selector);
+        vm.prank(user1);
+        jasmyRewards.distributeRewards(signature, rewards);
+
+        vm.prank(owner);
+        jasmyRewards.unpause();
+
+        vm.prank(user1);
+        jasmyRewards.distributeRewards(signature, rewards);
+
+        assertEq(jasmyToken.balanceOf(user1), rewards);
+
+        assertEq(
+            jasmyToken.balanceOf(address(jasmyRewards)),
+            1_000_000 ether - rewards
+        );
+
+        assertEq(jasmyRewards.getSigNonce(user1), nonce + 1);
     }
 
     function testWithdraw() public {
@@ -48,6 +109,7 @@ contract JasmyRewardsTest is Test, EIP712 {
         bytes32 hashedMessage = keccak256(
             abi.encode(
                 jasmyRewards.DISTRIBUTE_REWARDS_TYPEHASH(),
+                user1,
                 rewards,
                 nonce,
                 deadline
@@ -57,18 +119,18 @@ contract JasmyRewardsTest is Test, EIP712 {
         bytes32 domainSeparator = jasmyRewards.getDomainSeparator();
 
         bytes32 digest = _calculateEIP712Digest(domainSeparator, hashedMessage);
-        (uint8 v, bytes32 r, bytes32 s) = vm.sign(user1PK, digest);
+        (uint8 v, bytes32 r, bytes32 s) = vm.sign(administratorPK, digest);
 
         JasmyRewards.EIP712Signature memory signature = JasmyRewards
             .EIP712Signature({
-                signer: user1,
+                signer: administrator,
                 v: v,
                 r: r,
                 s: s,
                 deadline: deadline
             });
 
-        vm.prank(owner);
+        vm.prank(user1);
         jasmyRewards.distributeRewards(signature, rewards);
 
         assertEq(jasmyToken.balanceOf(user1), rewards);
@@ -81,21 +143,20 @@ contract JasmyRewardsTest is Test, EIP712 {
         assertEq(jasmyRewards.getSigNonce(user1), nonce + 1);
     }
 
-    function testDistributeRewardsInvalidSignature() public {
+    function testRevertDistributeRewardsWhenNotAdministratorSignature() public {
         uint256 nonce = jasmyRewards.getSigNonce(user1);
         uint256 deadline = block.timestamp + 1 hours;
         uint256 rewards = 100 ether;
 
-        bytes32 hashedMessage = 
-            keccak256(
-                abi.encode(
-                    jasmyRewards.DISTRIBUTE_REWARDS_TYPEHASH(),
-                    rewards,
-                    nonce,
-                    deadline
-                )
+        bytes32 hashedMessage = keccak256(
+            abi.encode(
+                jasmyRewards.DISTRIBUTE_REWARDS_TYPEHASH(),
+                user1,
+                rewards,
+                nonce,
+                deadline
             )
-        ;
+        );
 
         bytes32 domainSeparator = jasmyRewards.getDomainSeparator();
 
@@ -105,7 +166,42 @@ contract JasmyRewardsTest is Test, EIP712 {
 
         JasmyRewards.EIP712Signature memory signature = JasmyRewards
             .EIP712Signature({
-                signer: user1,
+                signer: user2,
+                v: v,
+                r: r,
+                s: s,
+                deadline: deadline
+            });
+
+        vm.expectRevert("signature not from administrator");
+        vm.prank(user1);
+        jasmyRewards.distributeRewards(signature, rewards);
+    }
+
+    function testRevertDistributeRewardsWhenCallerNotReceiver() public {
+        uint256 nonce = jasmyRewards.getSigNonce(user1);
+        uint256 deadline = block.timestamp + 1 hours;
+        uint256 rewards = 100 ether;
+
+        bytes32 hashedMessage = keccak256(
+            abi.encode(
+                jasmyRewards.DISTRIBUTE_REWARDS_TYPEHASH(),
+                user1,
+                rewards,
+                nonce,
+                deadline
+            )
+        );
+
+        bytes32 domainSeparator = jasmyRewards.getDomainSeparator();
+
+        bytes32 digest = _calculateEIP712Digest(domainSeparator, hashedMessage);
+
+        (uint8 v, bytes32 r, bytes32 s) = vm.sign(user2PK, digest);
+
+        JasmyRewards.EIP712Signature memory signature = JasmyRewards
+            .EIP712Signature({
+                signer: user2,
                 v: v,
                 r: r,
                 s: s,
@@ -113,7 +209,7 @@ contract JasmyRewardsTest is Test, EIP712 {
             });
 
         vm.expectRevert("signature mismatch");
-        vm.prank(owner);
+        vm.prank(user2);
         jasmyRewards.distributeRewards(signature, rewards);
     }
 
@@ -124,26 +220,25 @@ contract JasmyRewardsTest is Test, EIP712 {
 
         vm.warp(10);
 
-        bytes32 hashedMessage = 
-            keccak256(
-                abi.encode(
-                    jasmyRewards.DISTRIBUTE_REWARDS_TYPEHASH(),
-                    rewards,
-                    nonce,
-                    deadline
-                )
+        bytes32 hashedMessage = keccak256(
+            abi.encode(
+                jasmyRewards.DISTRIBUTE_REWARDS_TYPEHASH(),
+                user1,
+                rewards,
+                nonce,
+                deadline
             )
-        ;
+        );
 
         bytes32 domainSeparator = jasmyRewards.getDomainSeparator();
 
         bytes32 digest = _calculateEIP712Digest(domainSeparator, hashedMessage);
 
-        (uint8 v, bytes32 r, bytes32 s) = vm.sign(user1PK, digest);
+        (uint8 v, bytes32 r, bytes32 s) = vm.sign(administratorPK, digest);
 
         JasmyRewards.EIP712Signature memory signature = JasmyRewards
             .EIP712Signature({
-                signer: user1,
+                signer: administrator,
                 v: v,
                 r: r,
                 s: s,
@@ -151,7 +246,7 @@ contract JasmyRewardsTest is Test, EIP712 {
             });
 
         vm.expectRevert("signature expired");
-        vm.prank(owner);
+        vm.prank(administrator);
         jasmyRewards.distributeRewards(signature, rewards);
     }
 

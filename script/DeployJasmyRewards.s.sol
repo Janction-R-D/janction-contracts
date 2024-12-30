@@ -14,7 +14,8 @@ contract DeployJasmyRewards is Script {
         vm.startBroadcast(deployerPrivateKey);
 
         address initialOwner = deployer;
-        JasmyRewards jasmyRewards = new JasmyRewards(initialOwner, address(jasmyToken));
+        address administrator = 0x1cAA4472af8CD33eDD589a6Fb6e787C61f97c0ce;
+        JasmyRewards jasmyRewards = new JasmyRewards(initialOwner, administrator, address(jasmyToken));
         console.log("jasmyRewards:", address(jasmyRewards));
 
         jasmyToken.mint(address(jasmyRewards), 10000000000000 ether);
