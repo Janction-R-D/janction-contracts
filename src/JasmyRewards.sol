@@ -65,15 +65,14 @@ contract JasmyRewards is Ownable, EIP712, Pausable {
 
     function withdraw(
         address to,
-        address currency,
         uint256 amount
     ) public onlyOwner {
         require(to != address(0), "invalid recipient address");
         require(amount > 0, "amount must be greater than zero");
 
-        IERC20(currency).safeTransfer(to, amount);
+        IERC20(JASMY).safeTransfer(to, amount);
 
-        emit Withdrawed(to, currency, amount);
+        emit Withdrawed(to, JASMY, amount);
     }
 
     function pause() public onlyOwner {

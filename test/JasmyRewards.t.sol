@@ -94,7 +94,7 @@ contract JasmyRewardsTest is Test, EIP712 {
     function testWithdraw() public {
         vm.prank(owner);
 
-        jasmyRewards.withdraw(owner, address(jasmyToken), 500_000 ether);
+        jasmyRewards.withdraw(owner, 500_000 ether);
 
         assertEq(jasmyToken.balanceOf(owner), 500_000 ether);
 
