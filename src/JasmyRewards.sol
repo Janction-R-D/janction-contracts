@@ -36,15 +36,19 @@ contract JasmyRewards is Ownable, EIP712, Pausable {
 
     address public JASMY;
 
+    uint256 public MAX_DISTRIBUTE_AMOUNT;
+
     mapping(address => uint256) internal _sigNonces;
 
     constructor(
         address initialOwner,
         address administrator,
-        address jasmy
+        address jasmy,
+        uint256 maxDistributeAmount
     ) Ownable(initialOwner) EIP712("JasmyRewards", "1") {
         _administrator = administrator;
         JASMY = jasmy;
+        MAX_DISTRIBUTE_AMOUNT = maxDistributeAmount;
     }
 
     function getDomainSeparator() external view returns (bytes32) {
@@ -61,6 +65,10 @@ contract JasmyRewards is Ownable, EIP712, Pausable {
 
     function setJasmy(address jasmy) public onlyOwner {
         JASMY = jasmy;
+    }
+
+    function setMaxDistributeAmount(uint256 maxDistributeAmount) public onlyOwner {
+        MAX_DISTRIBUTE_AMOUNT = maxDistributeAmount;
     }
 
     function withdraw(
@@ -107,6 +115,8 @@ contract JasmyRewards is Ownable, EIP712, Pausable {
         require(signature.signer == recoveredAddr, "signature mismatch");
 
         require(signature.signer == _administrator, "signature not from administrator");
+
+        require(rewards <= MAX_DISTRIBUTE_AMOUNT, "distribute amount too large");
 
         IERC20(JASMY).safeTransfer(receiver, rewards);
 

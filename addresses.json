@@ -2,6 +2,10 @@
   "ETH": {
     "JasmyRewards": ""
   },
+  "SEPOLIA": {
+    "JASMY": "0x4be5136fE3E5c908183ec56A55C5A8fE6896faf2",
+    "JasmyRewards": "0xEce3d97486783b5a6E32B49c122EC3A5b73dd064"
+  },
   "OP": {
     "JanctionNFT": "0x437ec4194ee2EFdBF326fD16ebaa29418CF8c451"
   },

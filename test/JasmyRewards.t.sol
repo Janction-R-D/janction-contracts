@@ -33,7 +33,8 @@ contract JasmyRewardsTest is Test, EIP712 {
         jasmyRewards = new JasmyRewards(
             owner,
             administrator,
-            address(jasmyToken)
+            address(jasmyToken),
+            100000 ether
         );
 
         jasmyToken.mint(address(jasmyRewards), 1_000_000 ether);
@@ -141,6 +142,43 @@ contract JasmyRewardsTest is Test, EIP712 {
         );
 
         assertEq(jasmyRewards.getSigNonce(user1), nonce + 1);
+    }
+
+    function testDistributeRewardsWhenExceedsMaxDistributedAmount() public {
+        vm.prank(owner);
+        jasmyRewards.setMaxDistributeAmount(99 ether);
+
+        uint256 nonce = jasmyRewards.getSigNonce(user1);
+        uint256 deadline = block.timestamp + 1 hours;
+        uint256 rewards = 100 ether;
+
+        bytes32 hashedMessage = keccak256(
+            abi.encode(
+                jasmyRewards.DISTRIBUTE_REWARDS_TYPEHASH(),
+                user1,
+                rewards,
+                nonce,
+                deadline
+            )
+        );
+
+        bytes32 domainSeparator = jasmyRewards.getDomainSeparator();
+
+        bytes32 digest = _calculateEIP712Digest(domainSeparator, hashedMessage);
+        (uint8 v, bytes32 r, bytes32 s) = vm.sign(administratorPK, digest);
+
+        JasmyRewards.EIP712Signature memory signature = JasmyRewards
+            .EIP712Signature({
+                signer: administrator,
+                v: v,
+                r: r,
+                s: s,
+                deadline: deadline
+            });
+
+        vm.expectRevert("distribute amount too large");
+        vm.prank(user1);
+        jasmyRewards.distributeRewards(signature, rewards);
     }
 
     function testRevertDistributeRewardsWhenNotAdministratorSignature() public {
