@@ -3,7 +3,6 @@ pragma solidity ^0.8.21;
 
 import "forge-std/Script.sol";
 import {Distribution} from "../src/Distribution.sol";
-import {CurrencyMock} from "../test/mocks/CurrencyMock.sol";
 
 contract DeployDistribution is Script {
     function run() external {
@@ -16,13 +15,9 @@ contract DeployDistribution is Script {
         address initialTreasury = deployer;
         Distribution distribution = new Distribution(initialOwner, initialTreasury);
 
-        CurrencyMock usdt = CurrencyMock(0xCA181238E466Fd450AbCCFc8eaADECA3646e7b99);
-        CurrencyMock usdc = CurrencyMock(0x1123904310D41b95e30747E9687Bb167eB370547);
-        CurrencyMock jct = CurrencyMock(0xa780e5799805eCF2c8aaebf551180F8109139B38);
+        address usdt = 0x94b008aA00579c1307B0EF2c499aD98a8ce58e58;
 
-        distribution.whitelistCurrency(address(usdt), true);
-        distribution.whitelistCurrency(address(usdc), true);
-        distribution.whitelistCurrency(address(jct), true);
+        distribution.whitelistCurrency(usdt, true);
 
         console.log("Distribution:", address(distribution));
 
