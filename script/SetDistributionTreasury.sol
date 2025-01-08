@@ -5,7 +5,7 @@ import "forge-std/Script.sol";
 import {Distribution} from "../src/Distribution.sol";
 
 contract SetDistributionTreasury is Script {
-    Distribution distribution;
+    Distribution distribution = Distribution(0x78529A764A77325933dB1f22C26f8833a725df2d);
     address treasury;
 
     function run() external {
