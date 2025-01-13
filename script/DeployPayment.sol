@@ -2,28 +2,35 @@
 pragma solidity ^0.8.21;
 
 import "forge-std/Script.sol";
-import {Payment} from "../src/Payment.sol";
-import {CurrencyMock} from "../test/mocks/CurrencyMock.sol";
+import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
+import {PaymentImpl} from "../src/PaymentImpl.sol";
 
 contract DeployPayment is Script {
-    function run() external {
-        uint256 deployerPrivateKey = vm.envUint("PRIVATE_KEY");
-        address deployer = vm.addr(deployerPrivateKey);
+    uint256 deployerPrivateKey = vm.envUint("PRIVATE_KEY");
+    address deployer = vm.addr(deployerPrivateKey);
+    address initialOwner = deployer;
+    uint256 threshold = 2;  // 2/3
+    address usdt = 0xCA181238E466Fd450AbCCFc8eaADECA3646e7b99;
+    address usdc = 0x1123904310D41b95e30747E9687Bb167eB370547;
+    address jct = 0xa780e5799805eCF2c8aaebf551180F8109139B38;
 
+    function run() external {
         vm.startBroadcast(deployerPrivateKey);
 
-        address initialOwner = deployer;
-        Payment payment = new Payment(initialOwner);
+        PaymentImpl paymentImpl = new PaymentImpl();
 
-        CurrencyMock usdt = CurrencyMock(0xCA181238E466Fd450AbCCFc8eaADECA3646e7b99);
-        CurrencyMock usdc = CurrencyMock(0x1123904310D41b95e30747E9687Bb167eB370547);
-        CurrencyMock jct = CurrencyMock(0xa780e5799805eCF2c8aaebf551180F8109139B38);
+        ERC1967Proxy paymentProxy = new ERC1967Proxy(address(paymentImpl), abi.encodeWithSelector(
+            PaymentImpl.initialize.selector,
+            initialOwner,
+            threshold
+        ));
 
-        payment.whitelistCurrency(address(usdt), true);
-        payment.whitelistCurrency(address(usdc), true);
-        payment.whitelistCurrency(address(jct), true);
+        PaymentImpl(address(paymentProxy)).whitelistCurrency(address(usdt), true);
+        PaymentImpl(address(paymentProxy)).whitelistCurrency(address(usdc), true);
+        PaymentImpl(address(paymentProxy)).whitelistCurrency(address(jct), true);
 
-        console.log("Payment:", address(payment));
+        console.log("PaymentImpl:", address(paymentImpl));
+        console.log("PaymentProxy:", address(paymentProxy));
 
         vm.stopBroadcast();
     }
