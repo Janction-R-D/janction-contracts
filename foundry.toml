@@ -8,5 +8,6 @@ op = "${OP_RPC_URL}"
 op_sepolia = "${OP_SEPOLIA_RPC_URL}"
 eth = "${ETH_RPC_URL}"
 sepolia = "${SEPOLIA_RPC_URL}"
+jct_test = "${JCT_TEST_RPC_URL}"
 
 # See more config options https://github.com/foundry-rs/foundry/blob/master/crates/config/README.md#all-options
