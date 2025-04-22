@@ -9,6 +9,7 @@ contract DeployPayment is Script {
     uint256 deployerPrivateKey = vm.envUint("PRIVATE_KEY");
     address deployer = vm.addr(deployerPrivateKey);
     address initialOwner = deployer;
+    address administrator = 0x1cAA4472af8CD33eDD589a6Fb6e787C61f97c0ce;
     uint256 threshold = 2;  // 2/3
     address usdt = 0xCA181238E466Fd450AbCCFc8eaADECA3646e7b99;
     address usdc = 0x1123904310D41b95e30747E9687Bb167eB370547;
@@ -22,6 +23,7 @@ contract DeployPayment is Script {
         ERC1967Proxy paymentProxy = new ERC1967Proxy(address(paymentImpl), abi.encodeWithSelector(
             PaymentImpl.initialize.selector,
             initialOwner,
+            administrator,
             threshold
         ));
 

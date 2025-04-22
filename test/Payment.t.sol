@@ -7,6 +7,8 @@ import {PaymentImpl} from "../src/PaymentImpl.sol";
 import {CurrencyMock} from "./mocks/CurrencyMock.sol";
 
 contract PaymentTest is Test {
+    error OwnableUnauthorizedAccount(address account);
+
     PaymentImpl payment;
     CurrencyMock mockToken;
     address owner;
@@ -14,21 +16,29 @@ contract PaymentTest is Test {
     address payer;
     uint256 payerPK;
     address recipient;
+    uint256 recipientPK;
+    address admin;
+    uint256 adminPK;
 
     function setUp() public {
         (owner, ownerPK) = makeAddrAndKey("owner");
         (payer, payerPK) = makeAddrAndKey("payer");
-        recipient = makeAddr("recipient");
+        (recipient, recipientPK) = makeAddrAndKey("recipient");
+        (admin, adminPK) = makeAddrAndKey("admin");
 
         PaymentImpl paymentImpl = new PaymentImpl();
 
         ERC1967Proxy paymentProxy = new ERC1967Proxy(
             address(paymentImpl),
-            abi.encodeWithSelector(PaymentImpl.initialize.selector, owner, 2)
+            abi.encodeWithSelector(
+                PaymentImpl.initialize.selector,
+                owner,
+                admin,
+                2 // 需要2个签名
+            )
         );
 
         payment = PaymentImpl(address(paymentProxy));
-
         mockToken = new CurrencyMock("Currency Mock", "CM", 18);
         mockToken.mint(payer, 1_000 ether);
 
@@ -36,29 +46,11 @@ contract PaymentTest is Test {
         payment.whitelistCurrency(address(mockToken), true);
     }
 
-    function testSetSignatureThreshold() public {
-        vm.prank(owner);
-        payment.setSignatureThreshold(1);
-        assertEq(payment.signatureThreshold(), 1);
-
-        vm.prank(owner);
-        payment.setSignatureThreshold(2);
-        assertEq(payment.signatureThreshold(), 2);
-    }
-
-    function testWhitelistCurrency() public {
-        vm.prank(owner);
-        payment.whitelistCurrency(address(mockToken), false);
-        assertFalse(payment.isCurrencyWhitelisted(address(mockToken)));
-
-        vm.prank(owner);
-        payment.whitelistCurrency(address(mockToken), true);
-        assertTrue(payment.isCurrencyWhitelisted(address(mockToken)));
-    }
+    // ========== 基础功能测试 ==========
 
     function testCreatePaymentPlan() public {
         uint256 totalAmount = 100 ether;
-        uint256 totalDays = 10;
+        uint256 totalPeriods = 10;
 
         vm.startPrank(payer);
         mockToken.approve(address(payment), totalAmount);
@@ -68,7 +60,8 @@ contract PaymentTest is Test {
             recipient,
             address(mockToken),
             totalAmount,
-            totalDays
+            totalPeriods,
+            PaymentImpl.TimeGranularity.DAYS
         );
 
         bytes32 paymentId = keccak256(
@@ -81,18 +74,24 @@ contract PaymentTest is Test {
         assertEq(plan.recipient, recipient);
         assertEq(plan.currency, address(mockToken));
         assertEq(plan.totalAmount, totalAmount);
-        assertEq(plan.dailyAmount, totalAmount / totalDays);
-        assertEq(plan.totalDays, totalDays);
-        assertEq(plan.paidDays, 0);
+        assertEq(plan.periodAmount, totalAmount / totalPeriods);
+        assertEq(plan.totalPeriods, totalPeriods);
+        assertEq(plan.paidPeriods, 0);
         assertEq(plan.startTime, block.timestamp);
+        assertEq(
+            uint(plan.granularity),
+            uint(PaymentImpl.TimeGranularity.DAYS)
+        );
 
         vm.stopPrank();
     }
 
-    function testStopPaymentPlan() public {
+    function testStopPaymentPlanWithEIP712Signatures() public {
         uint256 totalAmount = 100 ether;
-        uint256 totalDays = 10;
+        uint256 totalPeriods = 10;
+        uint256 deadline = block.timestamp + 1 days;
 
+        // 创建支付计划
         vm.startPrank(payer);
         mockToken.approve(address(payment), totalAmount);
         payment.createPaymentPlan(
@@ -100,80 +99,136 @@ contract PaymentTest is Test {
             recipient,
             address(mockToken),
             totalAmount,
-            totalDays
+            totalPeriods,
+            PaymentImpl.TimeGranularity.DAYS
         );
+        vm.stopPrank();
 
         bytes32 paymentId = keccak256(
             abi.encodePacked(payer, recipient, uint256(0))
         );
 
-        // Generate signatures from payer and owner
-        bytes32 messageHash = keccak256(abi.encodePacked(paymentId, "STOP"));
-        bytes32 prefixedMessageHash = keccak256(
-            abi.encodePacked("\x19Ethereum Signed Message:\n32", messageHash)
+        // 准备EIP712签名
+        bytes32 typeHash = payment.STOP_PAYMENT_PLAN_TYPEHASH();
+        bytes32 digest = keccak256(abi.encode(typeHash, paymentId, deadline));
+        bytes32 domainSeparator = payment.getDomainSeparator();
+        bytes32 structHash = keccak256(
+            abi.encodePacked("\x19\x01", domainSeparator, digest)
         );
-        (uint8 v1, bytes32 r1, bytes32 s1) = vm.sign(ownerPK, prefixedMessageHash); // owner
-        (uint8 v2, bytes32 r2, bytes32 s2) = vm.sign(payerPK, prefixedMessageHash); // payer
 
-        bytes[] memory signatures = new bytes[](2);
-        signatures[0] = abi.encodePacked(r1, s1, v1); // owner
-        signatures[1] = abi.encodePacked(r2, s2, v2); // payer
+        // 生成签名
+        (uint8 v1, bytes32 r1, bytes32 s1) = vm.sign(adminPK, structHash); // admin
+        (uint8 v2, bytes32 r2, bytes32 s2) = vm.sign(payerPK, structHash); // payer
 
+        PaymentImpl.EIP712Signature[]
+            memory signatures = new PaymentImpl.EIP712Signature[](2);
+        signatures[0] = PaymentImpl.EIP712Signature({
+            signer: admin,
+            v: v1,
+            r: r1,
+            s: s1,
+            deadline: deadline
+        });
+        signatures[1] = PaymentImpl.EIP712Signature({
+            signer: payer,
+            v: v2,
+            r: r2,
+            s: s2,
+            deadline: deadline
+        });
+
+        // 执行停止
         payment.stopPaymentPlan(paymentId, signatures);
 
+        // 验证状态
         PaymentImpl.PaymentPlan memory plan = payment.getPaymentPlan(paymentId);
         assertTrue(plan.stopped);
-
-        vm.stopPrank();
     }
 
-    function testStopPaymentPlanWhenPassedDays() public {
+    function testReleaseHourlyPayment() public {
         uint256 totalAmount = 100 ether;
-        uint256 totalDays = 10;
+        uint256 totalHours = 24; // 24小时支付计划
 
         vm.startPrank(payer);
         mockToken.approve(address(payment), totalAmount);
+
         payment.createPaymentPlan(
             payer,
             recipient,
             address(mockToken),
             totalAmount,
-            totalDays
+            totalHours,
+            PaymentImpl.TimeGranularity.HOURS // 小时粒度
         );
 
         bytes32 paymentId = keccak256(
             abi.encodePacked(payer, recipient, uint256(0))
         );
 
-        // Advance 1 day
-        vm.warp(block.timestamp + 1 days);
+        // 前进1小时
+        vm.warp(block.timestamp + 1 hours);
 
-        // Generate signatures from payer and owner
-        bytes32 messageHash = keccak256(abi.encodePacked(paymentId, "STOP"));
-        bytes32 prefixedMessageHash = keccak256(
-            abi.encodePacked("\x19Ethereum Signed Message:\n32", messageHash)
-        );
-        (uint8 v1, bytes32 r1, bytes32 s1) = vm.sign(ownerPK, prefixedMessageHash); // owner
-        (uint8 v2, bytes32 r2, bytes32 s2) = vm.sign(payerPK, prefixedMessageHash); // payer
-
-        bytes[] memory signatures = new bytes[](2);
-        signatures[0] = abi.encodePacked(r1, s1, v1); // owner
-        signatures[1] = abi.encodePacked(r2, s2, v2); // payer
-
-        payment.stopPaymentPlan(paymentId, signatures);
+        payment.releasePeriodPayment(paymentId);
 
         PaymentImpl.PaymentPlan memory plan = payment.getPaymentPlan(paymentId);
-        assertTrue(plan.stopped);
-        assertEq(plan.paidDays, 1);
-        assertEq(mockToken.balanceOf(recipient), totalAmount / totalDays);
+        assertEq(plan.paidPeriods, 1);
+        assertEq(mockToken.balanceOf(recipient), totalAmount / totalHours);
+
+        // 前进12小时
+        vm.warp(block.timestamp + 12 hours);
+
+        payment.releasePeriodPayment(paymentId);
+
+        plan = payment.getPaymentPlan(paymentId);
+        assertEq(plan.paidPeriods, 13); // 1 + 12
+        assertEq(
+            mockToken.balanceOf(recipient),
+            13 * (totalAmount / totalHours)
+        );
 
         vm.stopPrank();
     }
 
-    function testCannotStopPaymentPlanWhenAlreadyStopped() public {
-        uint256 totalAmount = 100 ether;
-        uint256 totalDays = 10;
+    function testFinalHourlyPaymentAccuracy() public {
+        uint256 totalAmount = 100.5 ether; // 测试非整除金额
+        uint256 totalHours = 10;
 
+        vm.startPrank(payer);
+        mockToken.approve(address(payment), totalAmount);
+
+        payment.createPaymentPlan(
+            payer,
+            recipient,
+            address(mockToken),
+            totalAmount,
+            totalHours,
+            PaymentImpl.TimeGranularity.HOURS
+        );
+
+        bytes32 paymentId = keccak256(
+            abi.encodePacked(payer, recipient, uint256(0))
+        );
+
+        // 前进全部时间
+        vm.warp(block.timestamp + totalHours * 1 hours);
+
+        payment.releasePeriodPayment(paymentId);
+
+        // 验证最终金额精确性
+        PaymentImpl.PaymentPlan memory plan = payment.getPaymentPlan(paymentId);
+        assertEq(plan.paidPeriods, totalHours);
+        assertEq(mockToken.balanceOf(recipient), totalAmount); // 应收到全部金额
+        assertEq(mockToken.balanceOf(address(payment)), 0); // 合约余额应为0
+    }
+
+    // ========== 签名验证边界测试 ==========
+
+    function testCannotStopWithExpiredSignature() public {
+        uint256 totalAmount = 100 ether;
+        uint256 totalPeriods = 10;
+        uint256 deadline = block.timestamp + 1 hours; // 短期有效期
+
+        // 创建支付计划
         vm.startPrank(payer);
         mockToken.approve(address(payment), totalAmount);
         payment.createPaymentPlan(
@@ -181,33 +236,55 @@ contract PaymentTest is Test {
             recipient,
             address(mockToken),
             totalAmount,
-            totalDays
+            totalPeriods,
+            PaymentImpl.TimeGranularity.DAYS
         );
+        vm.stopPrank();
 
         bytes32 paymentId = keccak256(
             abi.encodePacked(payer, recipient, uint256(0))
         );
 
-        bytes32 messageHash = keccak256(abi.encodePacked(paymentId, "STOP"));
-        bytes32 prefixedMessageHash = keccak256(
-            abi.encodePacked("\x19Ethereum Signed Message:\n32", messageHash)
+        // 准备签名
+        bytes32 typeHash = payment.STOP_PAYMENT_PLAN_TYPEHASH();
+        bytes32 digest = keccak256(abi.encode(typeHash, paymentId, deadline));
+        bytes32 domainSeparator = payment.getDomainSeparator();
+        bytes32 structHash = keccak256(
+            abi.encodePacked("\x19\x01", domainSeparator, digest)
         );
-        (uint8 v1, bytes32 r1, bytes32 s1) = vm.sign(ownerPK, prefixedMessageHash); // owner
-        (uint8 v2, bytes32 r2, bytes32 s2) = vm.sign(payerPK, prefixedMessageHash); // payer
 
-        bytes[] memory signatures = new bytes[](2);
-        signatures[0] = abi.encodePacked(r1, s1, v1); // owner
-        signatures[1] = abi.encodePacked(r2, s2, v2); // payer
+        (uint8 v1, bytes32 r1, bytes32 s1) = vm.sign(adminPK, structHash);
+        (uint8 v2, bytes32 r2, bytes32 s2) = vm.sign(payerPK, structHash);
 
-        payment.stopPaymentPlan(paymentId, signatures);
+        PaymentImpl.EIP712Signature[]
+            memory signatures = new PaymentImpl.EIP712Signature[](2);
+        signatures[0] = PaymentImpl.EIP712Signature({
+            signer: admin,
+            v: v1,
+            r: r1,
+            s: s1,
+            deadline: deadline
+        });
+        signatures[1] = PaymentImpl.EIP712Signature({
+            signer: payer,
+            v: v2,
+            r: r2,
+            s: s2,
+            deadline: deadline
+        });
 
-        vm.expectRevert("payment has already stopped");
+        // 时间超过deadline
+        vm.warp(deadline + 1);
+
+        // 应失败
+        vm.expectRevert("signature expired");
         payment.stopPaymentPlan(paymentId, signatures);
     }
 
-    function testCannotStopPaymentPlanWithInsufficientSignatures() public {
+    function testCannotStopWithInvalidSigner() public {
         uint256 totalAmount = 100 ether;
-        uint256 totalDays = 10;
+        uint256 totalPeriods = 10;
+        uint256 deadline = block.timestamp + 1 days;
 
         vm.startPrank(payer);
         mockToken.approve(address(payment), totalAmount);
@@ -216,169 +293,334 @@ contract PaymentTest is Test {
             recipient,
             address(mockToken),
             totalAmount,
-            totalDays
+            totalPeriods,
+            PaymentImpl.TimeGranularity.DAYS
         );
+        vm.stopPrank();
 
         bytes32 paymentId = keccak256(
             abi.encodePacked(payer, recipient, uint256(0))
         );
 
-        bytes32 messageHash = keccak256(abi.encodePacked(paymentId, "STOP"));
-        bytes32 prefixedMessageHash = keccak256(
-            abi.encodePacked("\x19Ethereum Signed Message:\n32", messageHash)
-        );
-        (uint8 v2, bytes32 r2, bytes32 s2) = vm.sign(payerPK, prefixedMessageHash); // payer
+        // 使用无效签名者(随机地址)
+        (address invalidSigner, uint256 invalidPK) = makeAddrAndKey("invalid");
 
-        bytes[] memory signatures = new bytes[](1);
-        signatures[0] = abi.encodePacked(r2, s2, v2); // payer
-
-        vm.expectRevert("insufficient signatures");
-        payment.stopPaymentPlan(paymentId, signatures);
-    }
-
-    function testCannotStopPaymentPlanWithInsufficientValidSignatures() public {
-        uint256 totalAmount = 100 ether;
-        uint256 totalDays = 10;
-
-        vm.startPrank(payer);
-        mockToken.approve(address(payment), totalAmount);
-        payment.createPaymentPlan(
-            payer,
-            recipient,
-            address(mockToken),
-            totalAmount,
-            totalDays
+        bytes32 typeHash = payment.STOP_PAYMENT_PLAN_TYPEHASH();
+        bytes32 digest = keccak256(abi.encode(typeHash, paymentId, deadline));
+        bytes32 domainSeparator = payment.getDomainSeparator();
+        bytes32 structHash = keccak256(
+            abi.encodePacked("\x19\x01", domainSeparator, digest)
         );
 
-        bytes32 paymentId = keccak256(
-            abi.encodePacked(payer, recipient, uint256(0))
-        );
+        (uint8 v1, bytes32 r1, bytes32 s1) = vm.sign(invalidPK, structHash);
+        (uint8 v2, bytes32 r2, bytes32 s2) = vm.sign(payerPK, structHash);
 
-        bytes32 messageHash = keccak256(abi.encodePacked(paymentId, "STOP"));
-        bytes32 prefixedMessageHash = keccak256(
-            abi.encodePacked("\x19Ethereum Signed Message:\n32", messageHash)
-        );
-        (uint8 v1, bytes32 r1, bytes32 s1) = vm.sign(ownerPK, prefixedMessageHash); // owner
-        (uint8 v2, bytes32 r2, bytes32 s2) = vm.sign(payerPK, prefixedMessageHash); // payer
-
-        uint8 wrongV2 = v2 + 1;
-
-        bytes[] memory signatures = new bytes[](2);
-        signatures[0] = abi.encodePacked(r1, s1, v1); // owner
-        signatures[1] = abi.encodePacked(r2, s2, wrongV2); // payer
+        PaymentImpl.EIP712Signature[]
+            memory signatures = new PaymentImpl.EIP712Signature[](2);
+        signatures[0] = PaymentImpl.EIP712Signature({
+            signer: invalidSigner,
+            v: v1,
+            r: r1,
+            s: s1,
+            deadline: deadline
+        });
+        signatures[1] = PaymentImpl.EIP712Signature({
+            signer: payer,
+            v: v2,
+            r: r2,
+            s: s2,
+            deadline: deadline
+        });
 
         vm.expectRevert("insufficient valid signatures");
         payment.stopPaymentPlan(paymentId, signatures);
     }
 
-    function testReleaseDailyPayment() public {
+    function testCannotStopWithDuplicateSignatures() public {
         uint256 totalAmount = 100 ether;
-        uint256 totalDays = 10;
+        uint256 totalPeriods = 10;
+        uint256 deadline = block.timestamp + 1 days;
 
         vm.startPrank(payer);
         mockToken.approve(address(payment), totalAmount);
-
         payment.createPaymentPlan(
             payer,
             recipient,
             address(mockToken),
             totalAmount,
-            totalDays
+            totalPeriods,
+            PaymentImpl.TimeGranularity.DAYS
         );
+        vm.stopPrank();
 
         bytes32 paymentId = keccak256(
             abi.encodePacked(payer, recipient, uint256(0))
         );
 
-        // Advance 1 day
-        vm.warp(block.timestamp + 1 days);
+        bytes32 typeHash = payment.STOP_PAYMENT_PLAN_TYPEHASH();
+        bytes32 digest = keccak256(abi.encode(typeHash, paymentId, deadline));
+        bytes32 domainSeparator = payment.getDomainSeparator();
+        bytes32 structHash = keccak256(
+            abi.encodePacked("\x19\x01", domainSeparator, digest)
+        );
 
-        payment.releaseDailyPayment(paymentId);
+        (uint8 v1, bytes32 r1, bytes32 s1) = vm.sign(payerPK, structHash);
 
-        PaymentImpl.PaymentPlan memory plan = payment.getPaymentPlan(paymentId);
-        assertEq(plan.paidDays, 1);
-        assertEq(mockToken.balanceOf(recipient), totalAmount / totalDays);
+        // 使用相同的签名两次
+        PaymentImpl.EIP712Signature[]
+            memory signatures = new PaymentImpl.EIP712Signature[](2);
+        signatures[0] = PaymentImpl.EIP712Signature({
+            signer: payer,
+            v: v1,
+            r: r1,
+            s: s1,
+            deadline: deadline
+        });
+        signatures[1] = signatures[0]; // 重复签名
 
-        // Advance another day and release again
-        vm.warp(block.timestamp + 1 days);
-
-        payment.releaseDailyPayment(paymentId);
-
-        plan = payment.getPaymentPlan(paymentId);
-        assertEq(plan.paidDays, 2);
-        assertEq(mockToken.balanceOf(recipient), 2 * (totalAmount / totalDays));
-
-        vm.stopPrank();
+        vm.expectRevert("insufficient valid signatures");
+        payment.stopPaymentPlan(paymentId, signatures);
     }
 
-    function testReleaseFinalPayment() public {
+    // ========== 时间边界测试 ==========
+
+    function testReleasePartialPeriod() public {
         uint256 totalAmount = 100 ether;
-        uint256 totalDays = 10;
+        uint256 totalHours = 24;
 
         vm.startPrank(payer);
         mockToken.approve(address(payment), totalAmount);
-
         payment.createPaymentPlan(
             payer,
             recipient,
             address(mockToken),
             totalAmount,
-            totalDays
+            totalHours,
+            PaymentImpl.TimeGranularity.HOURS
         );
+        vm.stopPrank();
 
         bytes32 paymentId = keccak256(
             abi.encodePacked(payer, recipient, uint256(0))
         );
 
-        // Warp to the last payment day
-        vm.warp(block.timestamp + totalDays * 1 days);
+        // 前进30分钟(不足1小时)
+        vm.warp(block.timestamp + 30 minutes);
 
-        payment.releaseDailyPayment(paymentId);
-
-        PaymentImpl.PaymentPlan memory plan = payment.getPaymentPlan(paymentId);
-        assertEq(plan.paidDays, totalDays);
-        assertEq(mockToken.balanceOf(recipient), totalAmount);
-
-        vm.stopPrank();
-    }
-
-    function testCannotCreatePlanWithNonWhitelistedCurrency() public {
-        address unwhitelistedToken = address(0xDEAD);
-
-        vm.startPrank(payer);
-        vm.expectRevert("currency not whitelisted");
-        payment.createPaymentPlan(
-            payer,
-            recipient,
-            unwhitelistedToken,
-            100 ether,
-            10
-        );
-        vm.stopPrank();
-    }
-
-    function testCannotReleaseBeforeTime() public {
-        uint256 totalAmount = 100 ether;
-        uint256 totalDays = 10;
-
-        vm.startPrank(payer);
-        mockToken.approve(address(payment), totalAmount);
-
-        payment.createPaymentPlan(
-            payer,
-            recipient,
-            address(mockToken),
-            totalAmount,
-            totalDays
-        );
-
-        bytes32 paymentId = keccak256(
-            abi.encodePacked(payer, recipient, uint256(0))
-        );
-
+        // 不应释放任何支付
         vm.expectRevert("not yet time for the next payment");
-        payment.releaseDailyPayment(paymentId);
+        payment.releasePeriodPayment(paymentId);
+    }
 
+    function testReleaseAtExactPeriodBoundary() public {
+        uint256 totalAmount = 100 ether;
+        uint256 totalHours = 24;
+
+        vm.startPrank(payer);
+        mockToken.approve(address(payment), totalAmount);
+        payment.createPaymentPlan(
+            payer,
+            recipient,
+            address(mockToken),
+            totalAmount,
+            totalHours,
+            PaymentImpl.TimeGranularity.HOURS
+        );
+        vm.stopPrank();
+
+        bytes32 paymentId = keccak256(
+            abi.encodePacked(payer, recipient, uint256(0))
+        );
+
+        // 精确前进1小时
+        vm.warp(block.timestamp + 1 hours);
+
+        payment.releasePeriodPayment(paymentId);
+
+        PaymentImpl.PaymentPlan memory plan = payment.getPaymentPlan(paymentId);
+        assertEq(plan.paidPeriods, 1);
+        assertEq(mockToken.balanceOf(recipient), totalAmount / totalHours);
+    }
+
+    // ========== 金额边界测试 ==========
+
+    function testSmallAmountDivision() public {
+        uint256 totalAmount = 9; // 极小金额
+        uint256 totalPeriods = 3;
+
+        vm.startPrank(payer);
+        mockToken.approve(address(payment), totalAmount);
+        payment.createPaymentPlan(
+            payer,
+            recipient,
+            address(mockToken),
+            totalAmount,
+            totalPeriods,
+            PaymentImpl.TimeGranularity.DAYS
+        );
+        vm.stopPrank();
+
+        bytes32 paymentId = keccak256(
+            abi.encodePacked(payer, recipient, uint256(0))
+        );
+
+        // 前进1天
+        vm.warp(block.timestamp + 1 days);
+
+        payment.releasePeriodPayment(paymentId);
+
+        // 验证9/3=3个token被释放
+        assertEq(mockToken.balanceOf(recipient), 3);
+    }
+
+    function testAmountNotDivisibleByPeriods() public {
+        uint256 totalAmount = 100.001 ether; // 不能被整除的金额
+        uint256 totalPeriods = 3;
+
+        vm.startPrank(payer);
+        mockToken.approve(address(payment), totalAmount);
+        payment.createPaymentPlan(
+            payer,
+            recipient,
+            address(mockToken),
+            totalAmount,
+            totalPeriods,
+            PaymentImpl.TimeGranularity.DAYS
+        );
+        vm.stopPrank();
+
+        bytes32 paymentId = keccak256(
+            abi.encodePacked(payer, recipient, uint256(0))
+        );
+
+        // 前进全部时间
+        vm.warp(block.timestamp + totalPeriods * 1 days);
+
+        payment.releasePeriodPayment(paymentId);
+
+        // 验证最终金额精确性
+        assertEq(mockToken.balanceOf(recipient), totalAmount);
+        assertEq(mockToken.balanceOf(address(payment)), 0);
+    }
+
+    // ========== 权限边界测试 ==========
+
+    function testNonOwnerCannotWhitelist() public {
+        address attacker = makeAddr("attacker");
+
+        vm.prank(attacker);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                OwnableUnauthorizedAccount.selector,
+                attacker
+            )
+        );
+        payment.whitelistCurrency(address(mockToken), false);
+    }
+
+    function testNonAdminCannotSetThreshold() public {
+        address attacker = makeAddr("attacker");
+
+        vm.prank(attacker);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                OwnableUnauthorizedAccount.selector,
+                attacker
+            )
+        );
+        payment.setSignatureThreshold(1);
+    }
+
+    // ========== 状态边界测试 ==========
+
+    function testCannotReleaseAfterStopped() public {
+        uint256 totalAmount = 100 ether;
+        uint256 totalPeriods = 10;
+
+        vm.startPrank(payer);
+        mockToken.approve(address(payment), totalAmount);
+        payment.createPaymentPlan(
+            payer,
+            recipient,
+            address(mockToken),
+            totalAmount,
+            totalPeriods,
+            PaymentImpl.TimeGranularity.DAYS
+        );
+        vm.stopPrank();
+
+        bytes32 paymentId = keccak256(
+            abi.encodePacked(payer, recipient, uint256(0))
+        );
+
+        // 停止支付计划
+        uint256 deadline = block.timestamp + 1 days;
+        bytes32 typeHash = payment.STOP_PAYMENT_PLAN_TYPEHASH();
+        bytes32 digest = keccak256(abi.encode(typeHash, paymentId, deadline));
+        bytes32 domainSeparator = payment.getDomainSeparator();
+        bytes32 structHash = keccak256(
+            abi.encodePacked("\x19\x01", domainSeparator, digest)
+        );
+
+        (uint8 v1, bytes32 r1, bytes32 s1) = vm.sign(adminPK, structHash);
+        (uint8 v2, bytes32 r2, bytes32 s2) = vm.sign(payerPK, structHash);
+
+        PaymentImpl.EIP712Signature[]
+            memory signatures = new PaymentImpl.EIP712Signature[](2);
+        signatures[0] = PaymentImpl.EIP712Signature({
+            signer: admin,
+            v: v1,
+            r: r1,
+            s: s1,
+            deadline: deadline
+        });
+        signatures[1] = PaymentImpl.EIP712Signature({
+            signer: payer,
+            v: v2,
+            r: r2,
+            s: s2,
+            deadline: deadline
+        });
+
+        payment.stopPaymentPlan(paymentId, signatures);
+
+        // 尝试释放
+        vm.warp(block.timestamp + 1 days);
+        vm.expectRevert("payment has already stopped");
+        payment.releasePeriodPayment(paymentId);
+    }
+
+    // ========== 其他边界测试 ==========
+
+    function testCannotCreatePlanWithZeroAmount() public {
+        vm.startPrank(payer);
+        mockToken.approve(address(payment), 0);
+
+        vm.expectRevert("period release amount must be greater than zero");
+        payment.createPaymentPlan(
+            payer,
+            recipient,
+            address(mockToken),
+            0, // 零金额
+            10,
+            PaymentImpl.TimeGranularity.DAYS
+        );
+        vm.stopPrank();
+    }
+
+    function testCannotCreatePlanWithZeroPeriods() public {
+        vm.startPrank(payer);
+        mockToken.approve(address(payment), 100 ether);
+
+        vm.expectRevert("total periods must be greater than zero");
+        payment.createPaymentPlan(
+            payer,
+            recipient,
+            address(mockToken),
+            100 ether,
+            0, // 零周期
+            PaymentImpl.TimeGranularity.DAYS
+        );
         vm.stopPrank();
     }
 }
