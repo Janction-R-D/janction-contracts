@@ -116,7 +116,7 @@ contract PaymentTest is Test {
         );
 
         // Generate EIP-712 signatures from payer and owner
-        uint256 deadline = block.timestamp + 3600;
+        uint256 deadline = block.timestamp + 1 hours;
         uint256[] memory privateKeys = new uint256[](2);
         privateKeys[0] = adminPK;
         privateKeys[1] = payerPK;
@@ -161,7 +161,7 @@ contract PaymentTest is Test {
         vm.warp(block.timestamp + 24 hours);
 
         // Generate EIP-712 signatures with updated deadline
-        uint256 deadline = block.timestamp + 3600; // Use current block.timestamp
+        uint256 deadline = block.timestamp + 1 hours; // Use current block.timestamp
 
         uint256[] memory privateKeys = new uint256[](2);
         privateKeys[0] = adminPK;
@@ -209,7 +209,7 @@ contract PaymentTest is Test {
         );
 
         // Generate EIP-712 signatures
-        uint256 deadline = block.timestamp + 3600;
+        uint256 deadline = block.timestamp + 1 hours;
         uint256[] memory privateKeys = new uint256[](2);
         privateKeys[0] = adminPK;
         privateKeys[1] = payerPK;
@@ -253,7 +253,7 @@ contract PaymentTest is Test {
         );
 
         // Generate EIP-712 signature from payer only
-        uint256 deadline = block.timestamp + 3600;
+        uint256 deadline = block.timestamp + 1 hours;
         uint256[] memory privateKeys = new uint256[](1);
         privateKeys[0] = payerPK;
         address[] memory signers = new address[](1);
@@ -291,7 +291,7 @@ contract PaymentTest is Test {
         );
 
         // Generate EIP-712 signatures from payer and owner
-        uint256 deadline = block.timestamp + 3600;
+        uint256 deadline = block.timestamp + 1 hours;
         uint256[] memory privateKeys = new uint256[](2);
         privateKeys[0] = adminPK;
         privateKeys[1] = payerPK;
@@ -332,7 +332,7 @@ contract PaymentTest is Test {
         );
 
         // Advance slightly more than 1 hour to ensure the time check passes
-        uint256 nextTime = 3601;
+        uint256 nextTime = block.timestamp + 1 hours;
         vm.warp(nextTime);
 
         payment.releaseHourlyPayment(paymentId);
@@ -342,7 +342,7 @@ contract PaymentTest is Test {
         assertEq(mockToken.balanceOf(recipient), totalAmount / totalHours);
 
         // Advance another hour and release again
-        nextTime = 7202;
+        nextTime = block.timestamp + 1 hours;
         vm.warp(nextTime);
 
         payment.releaseHourlyPayment(paymentId);
