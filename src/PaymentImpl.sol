@@ -3,25 +3,11 @@ pragma solidity ^0.8.21;
 
 import {UUPSUpgradeable} from "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
 import {OwnableUpgradeable} from "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
-import {EIP712Upgradeable} from "@openzeppelin/contracts-upgradeable/utils/cryptography/EIP712Upgradeable.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 
-contract PaymentImpl is UUPSUpgradeable, OwnableUpgradeable, EIP712Upgradeable {
+contract PaymentImpl is UUPSUpgradeable, OwnableUpgradeable {
     using SafeERC20 for IERC20;
-
-    enum TimeGranularity {
-        DAYS,
-        HOURS
-    }
-
-    struct EIP712Signature {
-        address signer;
-        uint8 v;
-        bytes32 r;
-        bytes32 s;
-        uint256 deadline;
-    }
 
     struct PaymentPlan {
         bool stopped; // stop status
@@ -29,11 +15,10 @@ contract PaymentImpl is UUPSUpgradeable, OwnableUpgradeable, EIP712Upgradeable {
         address recipient; // recipient address
         address currency; // payment currency
         uint256 totalAmount; // Total one-time amount
-        uint256 periodAmount; // Amount per period (day/hour)
+        uint256 dailyAmount; // Daily payment amount
         uint256 startTime; // Start timestamp
-        uint256 paidPeriods; // Periods already paid
-        uint256 totalPeriods; // Total periods in the plan
-        TimeGranularity granularity; // Time granularity for payments
+        uint256 paidDays; // Days already paid
+        uint256 totalDays; // Total days in the plan
     }
 
     event PaymentPlanCreated(
@@ -41,10 +26,9 @@ contract PaymentImpl is UUPSUpgradeable, OwnableUpgradeable, EIP712Upgradeable {
         address indexed payer,
         address indexed recipient,
         address currency,
-        uint256 totalPeriods,
+        uint256 totalDays,
         uint256 totalAmount,
-        uint256 periodAmount,
-        TimeGranularity granularity
+        uint256 dailyAmount
     );
 
     event PaymentPlanStopped(
@@ -54,42 +38,27 @@ contract PaymentImpl is UUPSUpgradeable, OwnableUpgradeable, EIP712Upgradeable {
         uint256 refundedAmount
     );
 
-    event PeriodPaymentReleased(
+    event DailyPaymentReleased(
         bytes32 indexed paymentId,
         address indexed payer,
         address indexed recipient,
-        uint256 paidPeriods
+        uint256 paidDays
     );
 
-    bytes32 public constant STOP_PAYMENT_PLAN_TYPEHASH =
-        keccak256(bytes("StopPaymentPlan(bytes32 paymentId,uint256 deadline)"));
-
-    address internal _administrator;
-
     uint256 public signatureThreshold;
-
     /// @dev payer => auto increment nonce
     mapping(address => uint256) internal _nonces;
-
     /// @dev currency => is whitelisted
     mapping(address => bool) public isCurrencyWhitelisted;
-
     /// @dev payment id => payment plan
     mapping(bytes32 => PaymentPlan) internal _paymentPlans;
 
     function initialize(
         address initialOwner,
-        address administrator,
         uint256 threshold
     ) public initializer {
         __Ownable_init(initialOwner);
-        __EIP712_init("PaymentImpl", "1");
-        _administrator = administrator;
         signatureThreshold = threshold;
-    }
-
-    function setAdministrator(address administrator) public onlyOwner {
-        _administrator = administrator;
     }
 
     function getPaymentPlan(
@@ -115,8 +84,7 @@ contract PaymentImpl is UUPSUpgradeable, OwnableUpgradeable, EIP712Upgradeable {
         address recipient,
         address currency,
         uint256 totalAmount,
-        uint256 totalPeriods,
-        TimeGranularity granularity
+        uint256 totalDays
     ) external {
         require(isCurrencyWhitelisted[currency], "currency not whitelisted");
 
@@ -130,10 +98,8 @@ contract PaymentImpl is UUPSUpgradeable, OwnableUpgradeable, EIP712Upgradeable {
             totalAmount
         );
 
-        require(totalPeriods > 0, "total periods must be greater than zero");
-
-        uint256 periodAmount = totalAmount / totalPeriods;
-        require(periodAmount > 0, "period release amount must be greater than zero");
+        uint256 dailyAmount = totalAmount / totalDays;
+        require(dailyAmount > 0, "invalid daily release amount");
 
         _paymentPlans[paymentId] = PaymentPlan({
             stopped: false,
@@ -141,11 +107,10 @@ contract PaymentImpl is UUPSUpgradeable, OwnableUpgradeable, EIP712Upgradeable {
             recipient: recipient,
             currency: currency,
             totalAmount: totalAmount,
-            periodAmount: periodAmount,
+            dailyAmount: dailyAmount,
             startTime: block.timestamp,
-            paidPeriods: 0,
-            totalPeriods: totalPeriods,
-            granularity: granularity
+            paidDays: 0,
+            totalDays: totalDays
         });
 
         emit PaymentPlanCreated(
@@ -153,16 +118,15 @@ contract PaymentImpl is UUPSUpgradeable, OwnableUpgradeable, EIP712Upgradeable {
             payer,
             recipient,
             currency,
-            totalPeriods,
+            totalDays,
             totalAmount,
-            periodAmount,
-            granularity
+            dailyAmount
         );
     }
 
     function stopPaymentPlan(
         bytes32 paymentId,
-        EIP712Signature[] calldata signatures
+        bytes[] calldata signatures
     ) external {
         require(
             signatures.length >= signatureThreshold,
@@ -177,30 +141,16 @@ contract PaymentImpl is UUPSUpgradeable, OwnableUpgradeable, EIP712Upgradeable {
         address[] memory signers = new address[](3);
         signers[0] = plan.payer;
         signers[1] = plan.recipient;
-        signers[2] = _administrator;
+        signers[2] = owner();
 
         uint256 validSignatures = 0;
         for (uint256 i = 0; i < signatures.length; i++) {
-            address recoveredAddr = _recoverEIP712Signer(
-                _hashTypedDataV4(
-                    keccak256(
-                        abi.encode(
-                            STOP_PAYMENT_PLAN_TYPEHASH,
-                            paymentId,
-                            signatures[i].deadline
-                        )
-                    )
-                ),
-                signatures[i]
+            bytes32 messageHash = keccak256(
+                abi.encodePacked(paymentId, "STOP")
             );
-
-            require(
-                recoveredAddr == signatures[i].signer,
-                "recovered address not equal to signer"
-            );
-
+            address signer = _recoverSigner(messageHash, signatures[i]);
             for (uint256 j = 0; j < signers.length; j++) {
-                if (recoveredAddr == signers[j]) {
+                if (signer == signers[j]) {
                     validSignatures++;
                     signers[j] = address(0); // Prevent double-counting
                     break;
@@ -213,11 +163,11 @@ contract PaymentImpl is UUPSUpgradeable, OwnableUpgradeable, EIP712Upgradeable {
             "insufficient valid signatures"
         );
 
-        try this.releasePeriodPayment(paymentId) {} catch {}
+        try this.releaseDailyPayment(paymentId) {} catch {}
 
         uint256 remainingBalance = plan.totalAmount -
-            plan.paidPeriods *
-            plan.periodAmount;
+            plan.paidDays *
+            plan.dailyAmount;
 
         IERC20(plan.currency).safeTransfer(plan.payer, remainingBalance);
 
@@ -231,67 +181,63 @@ contract PaymentImpl is UUPSUpgradeable, OwnableUpgradeable, EIP712Upgradeable {
         );
     }
 
-    function releasePeriodPayment(bytes32 paymentId) external {
+    function releaseDailyPayment(bytes32 paymentId) external {
         PaymentPlan storage plan = _paymentPlans[paymentId];
 
         require(plan.totalAmount > 0, "no payment plan found");
-        require(
-            plan.paidPeriods < plan.totalPeriods,
-            "all payments have been made"
-        );
+        require(plan.paidDays < plan.totalDays, "all payments have been made");
         require(!plan.stopped, "payment has already stopped");
 
-        uint256 periodDuration = (plan.granularity == TimeGranularity.DAYS)
-            ? 1 days
-            : 1 hours;
-        uint256 lastReleaseAt = plan.startTime +
-            plan.paidPeriods *
-            periodDuration;
-        uint256 passedPeriods = (block.timestamp - lastReleaseAt) /
-            periodDuration;
+        uint256 lastReleaseAt = plan.startTime + plan.paidDays * 1 days;
+        uint256 passedDays = (block.timestamp - lastReleaseAt) / 1 days;
 
-        require(passedPeriods > 0, "not yet time for the next payment");
+        require(passedDays > 0, "not yet time for the next payment");
 
-        // Determine the actual periods to pay without exceeding totalPeriods
-        uint256 periodsToPay = (plan.paidPeriods + passedPeriods >
-            plan.totalPeriods)
-            ? plan.totalPeriods - plan.paidPeriods
-            : passedPeriods;
+        // Determine the actual days to pay without exceeding totalDays
+        uint256 daysToPay = (plan.paidDays + passedDays > plan.totalDays)
+            ? plan.totalDays - plan.paidDays
+            : passedDays;
 
         // If this is the final payment, transfer the remaining balance to avoid overpayment
-        uint256 amountToTransfer = (plan.paidPeriods + periodsToPay ==
-            plan.totalPeriods)
-            ? plan.totalAmount - plan.paidPeriods * plan.periodAmount
-            : plan.periodAmount * periodsToPay;
+        uint256 amountToTransfer = (plan.paidDays + daysToPay == plan.totalDays)
+            ? plan.totalAmount - plan.paidDays * plan.dailyAmount
+            : plan.dailyAmount * daysToPay;
 
-        plan.paidPeriods += periodsToPay;
+        plan.paidDays += daysToPay;
 
         IERC20(plan.currency).safeTransfer(plan.recipient, amountToTransfer);
 
-        emit PeriodPaymentReleased(
+        emit DailyPaymentReleased(
             paymentId,
             plan.payer,
             plan.recipient,
-            plan.paidPeriods
+            plan.paidDays
         );
     }
 
-    function getDomainSeparator() external view returns (bytes32) {
-        return _domainSeparatorV4();
+    function _recoverSigner(
+        bytes32 messageHash,
+        bytes memory signature
+    ) internal pure returns (address) {
+        bytes32 prefixedMessageHash = keccak256(
+            abi.encodePacked("\x19Ethereum Signed Message:\n32", messageHash)
+        );
+        (bytes32 r, bytes32 s, uint8 v) = _splitSignature(signature);
+        return ecrecover(prefixedMessageHash, v, r, s);
     }
 
-    function _recoverEIP712Signer(
-        bytes32 digest,
-        EIP712Signature memory signature
-    ) internal view returns (address) {
-        require(block.timestamp < signature.deadline, "signature expired");
-        address recoveredAddress = ecrecover(
-            digest,
-            signature.v,
-            signature.r,
-            signature.s
-        );
-        return recoveredAddress;
+    function _splitSignature(
+        bytes memory sig
+    ) internal pure returns (bytes32 r, bytes32 s, uint8 v) {
+        require(sig.length == 65, "invalid signature length");
+
+        assembly {
+            r := mload(add(sig, 32))
+            s := mload(add(sig, 64))
+            v := byte(0, mload(add(sig, 96)))
+        }
+
+        return (r, s, v);
     }
 
     function _authorizeUpgrade(
