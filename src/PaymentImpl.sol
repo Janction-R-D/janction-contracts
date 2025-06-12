@@ -253,15 +253,9 @@ contract PaymentImpl is UUPSUpgradeable, OwnableUpgradeable, EIP712Upgradeable {
         );
     }
 
-    function _recoverSigner(
-        bytes32 messageHash,
-        bytes memory signature
-    ) internal pure returns (address) {
-        bytes32 prefixedMessageHash = keccak256(
-            abi.encodePacked("\x19Ethereum Signed Message:\n32", messageHash)
-        );
-        (bytes32 r, bytes32 s, uint8 v) = _splitSignature(signature);
-        return ecrecover(prefixedMessageHash, v, r, s);
+
+    function getDomainSeparator() external view returns (bytes32) {
+        return _domainSeparatorV4();
     }
 
     function _splitSignature(
@@ -276,10 +270,6 @@ contract PaymentImpl is UUPSUpgradeable, OwnableUpgradeable, EIP712Upgradeable {
         }
 
         return (r, s, v);
-    }
-
-    function getDomainSeparator() external view returns (bytes32) {
-        return _domainSeparatorV4();
     }
 
     function _recoverEIP712Signer(
