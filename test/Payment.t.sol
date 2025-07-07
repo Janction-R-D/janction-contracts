@@ -3,8 +3,9 @@ pragma solidity ^0.8.21;
 
 import "forge-std/Test.sol";
 import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
-import {PaymentImpl} from "../src/PaymentImpl.sol";
 import {CurrencyMock} from "./mocks/CurrencyMock.sol";
+import {PaymentImpl} from "../src/PaymentImpl.sol";
+import {PaymentImplV2} from "../src/PaymentImplV2.sol";
 
 contract PaymentTest is Test {
     PaymentImpl payment;
@@ -459,5 +460,97 @@ contract PaymentTest is Test {
             });
         }
         return signatures;
+    }
+
+    function testUpgradeToV2() public {
+        PaymentImplV2 v2 = new PaymentImplV2();
+        vm.startPrank(owner);
+        payment.upgradeToAndCall(address(v2), new bytes(0));
+        vm.stopPrank();
+        PaymentImplV2 paymentV2 = PaymentImplV2(address(payment));
+        assertEq(paymentV2.signatureThreshold(), payment.signatureThreshold());
+    }
+
+    function testStopPaymentPlanAdmin() public {
+        uint256 totalAmount = 100 ether;
+        uint256 totalHours = 240;
+        vm.startPrank(payer);
+        mockToken.approve(address(payment), totalAmount);
+        payment.createPaymentPlan(
+            payer,
+            recipient,
+            address(mockToken),
+            totalAmount,
+            totalHours
+        );
+        vm.stopPrank();
+
+        bytes32 paymentId = keccak256(
+            abi.encodePacked(payer, recipient, uint256(0))
+        );
+
+        // 升级到V2
+        PaymentImplV2 v2 = new PaymentImplV2();
+        vm.startPrank(owner);
+        payment.upgradeToAndCall(address(v2), new bytes(0));
+        vm.stopPrank();
+
+        // admin 直接终止
+        vm.startPrank(admin);
+        PaymentImplV2(address(payment)).stopPaymentPlanAdmin(paymentId);
+        PaymentImplV2.PaymentPlan memory plan = PaymentImplV2(address(payment))
+            .getPaymentPlan(paymentId);
+        assertTrue(plan.stopped);
+        vm.stopPrank();
+    }
+
+    function testBatchReleaseHourlyPayment() public {
+        uint256 totalAmount = 100 ether;
+        uint256 totalHours = 240;
+        // 创建两个计划
+        vm.startPrank(payer);
+        mockToken.approve(address(payment), totalAmount * 2);
+        payment.createPaymentPlan(
+            payer,
+            recipient,
+            address(mockToken),
+            totalAmount,
+            totalHours
+        );
+        payment.createPaymentPlan(
+            payer,
+            recipient,
+            address(mockToken),
+            totalAmount,
+            totalHours
+        );
+        vm.stopPrank();
+
+        bytes32 paymentId1 = keccak256(
+            abi.encodePacked(payer, recipient, uint256(0))
+        );
+        bytes32 paymentId2 = keccak256(
+            abi.encodePacked(payer, recipient, uint256(1))
+        );
+
+        // 升级到V2
+        PaymentImplV2 v2 = new PaymentImplV2();
+        vm.startPrank(owner);
+        payment.upgradeToAndCall(address(v2), new bytes(0));
+        vm.stopPrank();
+
+        // warp 1小时后批量释放
+        vm.warp(block.timestamp + 1 hours);
+        bytes32[] memory ids = new bytes32[](2);
+        ids[0] = paymentId1;
+        ids[1] = paymentId2;
+        PaymentImplV2(address(payment)).batchReleaseHourlyPayment(ids);
+
+        PaymentImplV2.PaymentPlan memory plan1 = PaymentImplV2(address(payment))
+            .getPaymentPlan(paymentId1);
+        PaymentImplV2.PaymentPlan memory plan2 = PaymentImplV2(address(payment))
+            .getPaymentPlan(paymentId2);
+        assertEq(plan1.paidHours, 1);
+        assertEq(plan2.paidHours, 1);
     }
 }

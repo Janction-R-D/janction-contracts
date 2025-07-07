@@ -10,7 +10,7 @@ contract DeployNFTEscrow is Script {
     uint256 deployerPrivateKey = vm.envUint("PRIVATE_KEY");
     address deployer = vm.addr(deployerPrivateKey);
     address initialOwner = deployer;
-    address janctionNFT = 0x6f899dA8D3d9De3A910Ee38773444B757D1Cf197;
+    address janctionNFT = 0x248f49674A9cc39E68615BD6669F5a395cbfa4D3;
 
     function run() external {
         vm.startBroadcast(deployerPrivateKey);
