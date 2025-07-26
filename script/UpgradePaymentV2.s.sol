@@ -8,7 +8,7 @@ import {PaymentImpl} from "../src/PaymentImpl.sol";
 contract UpgradePaymentV2 is Script {
     function run() external {
         uint256 deployerPrivateKey = vm.envUint("PRIVATE_KEY");
-        address proxyAddr = address(0xC81bD9Aa97Cd31F6F6C6e678f856C7eFC123c40e);
+        address proxyAddr = address(0x9Ca0645BC615C6191F023bEfB5c6464C2Dc0710E);
 
         vm.startBroadcast(deployerPrivateKey);
 
