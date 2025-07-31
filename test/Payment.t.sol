@@ -6,6 +6,7 @@ import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.s
 import {CurrencyMock} from "./mocks/CurrencyMock.sol";
 import {PaymentImpl} from "../src/PaymentImpl.sol";
 import {PaymentImplV2} from "../src/PaymentImplV2.sol";
+import {PaymentImplV3} from "../src/PaymentImplV3.sol";
 
 contract PaymentTest is Test {
     PaymentImpl payment;
@@ -552,5 +553,61 @@ contract PaymentTest is Test {
             .getPaymentPlan(paymentId2);
         assertEq(plan1.paidHours, 1);
         assertEq(plan2.paidHours, 1);
+    }
+
+    function testV3CreatePaymentPlanWithData() public {
+        // 升级到V3
+        PaymentImplV3 v3 = new PaymentImplV3();
+        vm.startPrank(owner);
+        payment.upgradeToAndCall(address(v3), new bytes(0));
+        vm.stopPrank();
+        PaymentImplV3 paymentV3 = PaymentImplV3(address(payment));
+
+        uint256 totalAmount = 100 ether;
+        uint256 totalHours = 240;
+        bytes32 data = keccak256("item-1");
+
+        vm.warp(block.timestamp + 10);
+
+        // 正常创建
+        vm.startPrank(payer);
+        mockToken.approve(address(paymentV3), totalAmount);
+        paymentV3.createPaymentPlan(
+            payer,
+            recipient,
+            address(mockToken),
+            totalAmount,
+            totalHours,
+            data
+        );
+        vm.stopPrank();
+
+        // 30秒内不能重复
+        vm.startPrank(payer);
+        mockToken.approve(address(paymentV3), totalAmount);
+        vm.expectRevert("item recently purchased");
+        paymentV3.createPaymentPlan(
+            payer,
+            recipient,
+            address(mockToken),
+            totalAmount,
+            totalHours,
+            data
+        );
+        vm.stopPrank();
+
+        // 10秒后可以再次创建
+        vm.warp(block.timestamp + 10);
+        vm.startPrank(payer);
+        mockToken.approve(address(paymentV3), totalAmount);
+        paymentV3.createPaymentPlan(
+            payer,
+            recipient,
+            address(mockToken),
+            totalAmount,
+            totalHours,
+            data
+        );
+        vm.stopPrank();
     }
 }
