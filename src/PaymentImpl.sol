@@ -7,7 +7,11 @@ import {EIP712Upgradeable} from "@openzeppelin/contracts-upgradeable/utils/crypt
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 
-contract PaymentImpl is UUPSUpgradeable, OwnableUpgradeable, EIP712Upgradeable {
+contract PaymentImpl is
+    UUPSUpgradeable,
+    OwnableUpgradeable,
+    EIP712Upgradeable
+{
     using SafeERC20 for IERC20;
 
     struct EIP712Signature {
@@ -28,6 +32,7 @@ contract PaymentImpl is UUPSUpgradeable, OwnableUpgradeable, EIP712Upgradeable {
         uint256 startTime; // Start timestamp
         uint256 paidHours; // Hours already paid
         uint256 totalHours; // Total hours in the plan
+        bytes32 data; // item id
     }
 
     event PaymentPlanCreated(
@@ -37,7 +42,8 @@ contract PaymentImpl is UUPSUpgradeable, OwnableUpgradeable, EIP712Upgradeable {
         address currency,
         uint256 totalHours,
         uint256 totalAmount,
-        uint256 hourlyAmount
+        uint256 hourlyAmount,
+        bytes32 data
     );
 
     event PaymentPlanStopped(
@@ -57,9 +63,17 @@ contract PaymentImpl is UUPSUpgradeable, OwnableUpgradeable, EIP712Upgradeable {
     bytes32 public constant STOP_PAYMENT_PLAN_TYPEHASH =
         keccak256(bytes("StopPaymentPlan(bytes32 paymentId,uint256 deadline)"));
 
+    uint256 public constant BASIS_POINTS = 10000;
+
     address internal _administrator;
 
+    address internal _treasury;
+
     uint256 public signatureThreshold;
+
+    uint256 public feePoints;
+
+    uint256 public purchaseInterval;
 
     /// @dev payer => auto increment nonce
     mapping(address => uint256) internal _nonces;
@@ -70,19 +84,47 @@ contract PaymentImpl is UUPSUpgradeable, OwnableUpgradeable, EIP712Upgradeable {
     /// @dev payment id => payment plan
     mapping(bytes32 => PaymentPlan) internal _paymentPlans;
 
+    /// @dev item data => last purchase time
+    mapping(bytes32 => uint256) public lastPurchaseTime;
+
+    modifier onlyAdmin() {
+        require(msg.sender == _administrator, "only admin");
+        _;
+    }
+
     function initialize(
         address initialOwner,
         address initialAdmin,
-        uint256 threshold
+        address initialTreasury,
+        uint256 initialThreshold,
+        uint256 initialFeePoints,
+        uint256 initialPurchaseInterval
     ) public initializer {
         __Ownable_init(initialOwner);
-        __EIP712_init("PaymentImpl", "1"); 
+        __EIP712_init("PaymentImpl", "1");
         _administrator = initialAdmin;
-        signatureThreshold = threshold;
+        _treasury = initialTreasury;
+        signatureThreshold = initialThreshold;
+        require(initialFeePoints <= BASIS_POINTS, "fee points cannot exceed 100%");
+        feePoints = initialFeePoints;
+        purchaseInterval = initialPurchaseInterval;
     }
 
     function setAdministrator(address administrator) public onlyOwner {
         _administrator = administrator;
+    }
+
+    function setTreasury(address treasury) public onlyOwner {
+        _treasury = treasury;
+    }
+
+    function setFeePoints(uint256 feePoints_) public onlyOwner {
+        require(feePoints_ <= BASIS_POINTS, "fee points cannot exceed 100%");
+        feePoints = feePoints_;
+    }
+
+    function setPurchaseInterval(uint256 purchaseInterval_) public onlyOwner {
+        purchaseInterval = purchaseInterval_;
     }
 
     function getPaymentPlan(
@@ -108,9 +150,14 @@ contract PaymentImpl is UUPSUpgradeable, OwnableUpgradeable, EIP712Upgradeable {
         address recipient,
         address currency,
         uint256 totalAmount,
-        uint256 totalHours
+        uint256 totalHours,
+        bytes32 data
     ) external {
         require(isCurrencyWhitelisted[currency], "currency not whitelisted");
+        require(
+            block.timestamp - lastPurchaseTime[data] >= purchaseInterval,
+            "item recently purchased"
+        );
 
         bytes32 paymentId = keccak256(
             abi.encodePacked(payer, recipient, _nonces[payer]++)
@@ -134,8 +181,11 @@ contract PaymentImpl is UUPSUpgradeable, OwnableUpgradeable, EIP712Upgradeable {
             hourlyAmount: hourlyAmount,
             startTime: block.timestamp,
             paidHours: 0,
-            totalHours: totalHours
+            totalHours: totalHours,
+            data: data
         });
+
+        lastPurchaseTime[data] = block.timestamp;
 
         emit PaymentPlanCreated(
             paymentId,
@@ -144,7 +194,8 @@ contract PaymentImpl is UUPSUpgradeable, OwnableUpgradeable, EIP712Upgradeable {
             currency,
             totalHours,
             totalAmount,
-            hourlyAmount
+            hourlyAmount,
+            data
         );
     }
 
@@ -219,11 +270,38 @@ contract PaymentImpl is UUPSUpgradeable, OwnableUpgradeable, EIP712Upgradeable {
         );
     }
 
+    function stopPaymentPlanAdmin(bytes32 paymentId) external onlyAdmin {
+        PaymentPlan storage plan = _paymentPlans[paymentId];
+        require(plan.totalAmount > 0, "no payment plan found");
+        require(!plan.stopped, "payment has already stopped");
+
+        // Try to release any due hourly payment before stopping
+        try this.releaseHourlyPayment(paymentId) {} catch {}
+
+        uint256 remainingBalance = plan.totalAmount -
+            plan.paidHours *
+            plan.hourlyAmount;
+
+        IERC20(plan.currency).safeTransfer(plan.payer, remainingBalance);
+
+        plan.stopped = true;
+
+        emit PaymentPlanStopped(
+            paymentId,
+            plan.payer,
+            plan.recipient,
+            remainingBalance
+        );
+    }
+
     function releaseHourlyPayment(bytes32 paymentId) external {
         PaymentPlan storage plan = _paymentPlans[paymentId];
 
         require(plan.totalAmount > 0, "no payment plan found");
-        require(plan.paidHours < plan.totalHours, "all payments have been made");
+        require(
+            plan.paidHours < plan.totalHours,
+            "all payments have been made"
+        );
         require(!plan.stopped, "payment has already stopped");
 
         uint256 lastReleaseAt = plan.startTime + plan.paidHours * 1 hours;
@@ -237,13 +315,20 @@ contract PaymentImpl is UUPSUpgradeable, OwnableUpgradeable, EIP712Upgradeable {
             : passedHours;
 
         // If this is the final payment, transfer the remaining balance to avoid overpayment
-        uint256 amountToTransfer = (plan.paidHours + hoursToPay == plan.totalHours)
+        uint256 amountToTransfer = (plan.paidHours + hoursToPay ==
+            plan.totalHours)
             ? plan.totalAmount - plan.paidHours * plan.hourlyAmount
             : plan.hourlyAmount * hoursToPay;
 
         plan.paidHours += hoursToPay;
 
-        IERC20(plan.currency).safeTransfer(plan.recipient, amountToTransfer);
+        uint256 fee = amountToTransfer * feePoints / BASIS_POINTS;
+
+        uint256 remaining = amountToTransfer - fee;
+
+        IERC20(plan.currency).safeTransfer(_treasury, fee);
+
+        IERC20(plan.currency).safeTransfer(plan.recipient, remaining);
 
         emit HourlyPaymentReleased(
             paymentId,
@@ -253,6 +338,12 @@ contract PaymentImpl is UUPSUpgradeable, OwnableUpgradeable, EIP712Upgradeable {
         );
     }
 
+    function batchReleaseHourlyPayment(bytes32[] memory paymentIds) external {
+        for (uint256 i = 0; i < paymentIds.length; i++) {
+            // Use try/catch to avoid revert on one payment blocking all
+            try this.releaseHourlyPayment(paymentIds[i]) {} catch {}
+        }
+    }
 
     function getDomainSeparator() external view returns (bytes32) {
         return _domainSeparatorV4();

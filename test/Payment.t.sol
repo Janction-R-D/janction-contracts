@@ -5,8 +5,6 @@ import "forge-std/Test.sol";
 import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 import {CurrencyMock} from "./mocks/CurrencyMock.sol";
 import {PaymentImpl} from "../src/PaymentImpl.sol";
-import {PaymentImplV2} from "../src/PaymentImplV2.sol";
-import {PaymentImplV3} from "../src/PaymentImplV3.sol";
 
 contract PaymentTest is Test {
     PaymentImpl payment;
@@ -19,11 +17,20 @@ contract PaymentTest is Test {
     uint256 payerPK;
     address recipient;
 
+    address treasury;
+
+    uint256 threshold = 2;
+    uint256 initialFeePoints = 0;
+    uint256 initialPurchaseInterval = 0;
+
+    bytes32 itemId = keccak256("item-1");
+
     function setUp() public {
         (owner, ownerPK) = makeAddrAndKey("owner");
         (payer, payerPK) = makeAddrAndKey("payer");
         (admin, adminPK) = makeAddrAndKey("admin");
         recipient = makeAddr("recipient");
+        treasury = makeAddr("treasury");
 
         PaymentImpl paymentImpl = new PaymentImpl();
 
@@ -33,7 +40,10 @@ contract PaymentTest is Test {
                 PaymentImpl.initialize.selector,
                 owner,
                 admin,
-                2
+                treasury,
+                threshold,
+                initialFeePoints,
+                initialPurchaseInterval
             )
         );
 
@@ -78,7 +88,8 @@ contract PaymentTest is Test {
             recipient,
             address(mockToken),
             totalAmount,
-            totalHours
+            totalHours,
+            itemId
         );
 
         bytes32 paymentId = keccak256(
@@ -99,6 +110,57 @@ contract PaymentTest is Test {
         vm.stopPrank();
     }
 
+    function testCreatePaymentPlanWhenSetPurchaseInterval() public {
+        uint256 totalAmount = 100 ether;
+        uint256 totalHours = 240;
+
+        vm.prank(owner);
+        payment.setPurchaseInterval(10);
+
+        vm.warp(block.timestamp + 10);
+
+        // 正常创建
+        vm.startPrank(payer);
+        mockToken.approve(address(payment), totalAmount);
+        payment.createPaymentPlan(
+            payer,
+            recipient,
+            address(mockToken),
+            totalAmount,
+            totalHours,
+            itemId
+        );
+        vm.stopPrank();
+
+        // 30秒内不能重复
+        vm.startPrank(payer);
+        mockToken.approve(address(payment), totalAmount);
+        vm.expectRevert("item recently purchased");
+        payment.createPaymentPlan(
+            payer,
+            recipient,
+            address(mockToken),
+            totalAmount,
+            totalHours,
+            itemId
+        );
+        vm.stopPrank();
+
+        // 10秒后可以再次创建
+        vm.warp(block.timestamp + 10);
+        vm.startPrank(payer);
+        mockToken.approve(address(payment), totalAmount);
+        payment.createPaymentPlan(
+            payer,
+            recipient,
+            address(mockToken),
+            totalAmount,
+            totalHours,
+            itemId
+        );
+        vm.stopPrank();
+    }
+
     function testStopPaymentPlan() public {
         uint256 totalAmount = 100 ether;
         uint256 totalHours = 240;
@@ -110,7 +172,8 @@ contract PaymentTest is Test {
             recipient,
             address(mockToken),
             totalAmount,
-            totalHours
+            totalHours,
+            itemId
         );
 
         bytes32 paymentId = keccak256(
@@ -152,7 +215,8 @@ contract PaymentTest is Test {
             recipient,
             address(mockToken),
             totalAmount,
-            totalHours
+            totalHours,
+            itemId
         );
 
         bytes32 paymentId = keccak256(
@@ -203,7 +267,8 @@ contract PaymentTest is Test {
             recipient,
             address(mockToken),
             totalAmount,
-            totalHours
+            totalHours,
+            itemId
         );
 
         bytes32 paymentId = keccak256(
@@ -247,7 +312,8 @@ contract PaymentTest is Test {
             recipient,
             address(mockToken),
             totalAmount,
-            totalHours
+            totalHours,
+            itemId
         );
 
         bytes32 paymentId = keccak256(
@@ -285,7 +351,8 @@ contract PaymentTest is Test {
             recipient,
             address(mockToken),
             totalAmount,
-            totalHours
+            totalHours,
+            itemId
         );
 
         bytes32 paymentId = keccak256(
@@ -326,7 +393,8 @@ contract PaymentTest is Test {
             recipient,
             address(mockToken),
             totalAmount,
-            totalHours
+            totalHours,
+            itemId
         );
 
         bytes32 paymentId = keccak256(
@@ -359,6 +427,63 @@ contract PaymentTest is Test {
         vm.stopPrank();
     }
 
+    function testReleaseHourlyPaymentWhenSetFee() public {
+        uint256 totalAmount = 100 ether;
+        uint256 totalHours = 10;
+
+        vm.prank(owner);
+        payment.setFeePoints(1000); // Set fee to 10%
+
+        vm.startPrank(payer);
+        mockToken.approve(address(payment), totalAmount);
+
+        payment.createPaymentPlan(
+            payer,
+            recipient,
+            address(mockToken),
+            totalAmount,
+            totalHours,
+            itemId
+        );
+
+        bytes32 paymentId = keccak256(
+            abi.encodePacked(payer, recipient, uint256(0))
+        );
+
+        // Advance slightly more than 1 hour to ensure the time check passes
+        uint256 nextTime = block.timestamp + 1 hours;
+        vm.warp(nextTime);
+
+        payment.releaseHourlyPayment(paymentId);
+
+        PaymentImpl.PaymentPlan memory plan = payment.getPaymentPlan(paymentId);
+        assertEq(plan.paidHours, 1);
+
+        uint256 amountToTransfer = (totalAmount / totalHours);
+        uint256 fee = (amountToTransfer * payment.feePoints()) /
+            payment.BASIS_POINTS();
+        uint256 amountAfterFee = amountToTransfer - fee;
+        assertEq(mockToken.balanceOf(recipient), amountAfterFee);
+        assertEq(mockToken.balanceOf(treasury), fee);
+
+        // Advance another hour and release again
+        nextTime = block.timestamp + 1 hours;
+        vm.warp(nextTime);
+
+        payment.releaseHourlyPayment(paymentId);
+
+        plan = payment.getPaymentPlan(paymentId);
+        assertEq(plan.paidHours, 2);
+
+        amountToTransfer = (totalAmount / totalHours) * 2;
+        fee = (amountToTransfer * payment.feePoints()) / payment.BASIS_POINTS();
+        amountAfterFee = amountToTransfer - fee;
+        assertEq(mockToken.balanceOf(recipient), amountAfterFee);
+        assertEq(mockToken.balanceOf(treasury), fee);
+
+        vm.stopPrank();
+    }
+
     function testReleaseFinalPayment() public {
         uint256 totalAmount = 100 ether;
         uint256 totalHours = 240;
@@ -371,7 +496,8 @@ contract PaymentTest is Test {
             recipient,
             address(mockToken),
             totalAmount,
-            totalHours
+            totalHours,
+            itemId
         );
 
         bytes32 paymentId = keccak256(
@@ -400,7 +526,8 @@ contract PaymentTest is Test {
             recipient,
             unwhitelistedToken,
             100 ether,
-            240
+            240,
+            itemId
         );
         vm.stopPrank();
     }
@@ -417,7 +544,8 @@ contract PaymentTest is Test {
             recipient,
             address(mockToken),
             totalAmount,
-            totalHours
+            totalHours,
+            itemId
         );
 
         bytes32 paymentId = keccak256(
@@ -463,15 +591,6 @@ contract PaymentTest is Test {
         return signatures;
     }
 
-    function testUpgradeToV2() public {
-        PaymentImplV2 v2 = new PaymentImplV2();
-        vm.startPrank(owner);
-        payment.upgradeToAndCall(address(v2), new bytes(0));
-        vm.stopPrank();
-        PaymentImplV2 paymentV2 = PaymentImplV2(address(payment));
-        assertEq(paymentV2.signatureThreshold(), payment.signatureThreshold());
-    }
-
     function testStopPaymentPlanAdmin() public {
         uint256 totalAmount = 100 ether;
         uint256 totalHours = 240;
@@ -482,7 +601,8 @@ contract PaymentTest is Test {
             recipient,
             address(mockToken),
             totalAmount,
-            totalHours
+            totalHours,
+            itemId
         );
         vm.stopPrank();
 
@@ -490,17 +610,10 @@ contract PaymentTest is Test {
             abi.encodePacked(payer, recipient, uint256(0))
         );
 
-        // 升级到V2
-        PaymentImplV2 v2 = new PaymentImplV2();
-        vm.startPrank(owner);
-        payment.upgradeToAndCall(address(v2), new bytes(0));
-        vm.stopPrank();
-
         // admin 直接终止
         vm.startPrank(admin);
-        PaymentImplV2(address(payment)).stopPaymentPlanAdmin(paymentId);
-        PaymentImplV2.PaymentPlan memory plan = PaymentImplV2(address(payment))
-            .getPaymentPlan(paymentId);
+        payment.stopPaymentPlanAdmin(paymentId);
+        PaymentImpl.PaymentPlan memory plan = payment.getPaymentPlan(paymentId);
         assertTrue(plan.stopped);
         vm.stopPrank();
     }
@@ -516,14 +629,16 @@ contract PaymentTest is Test {
             recipient,
             address(mockToken),
             totalAmount,
-            totalHours
+            totalHours,
+            itemId
         );
         payment.createPaymentPlan(
             payer,
             recipient,
             address(mockToken),
             totalAmount,
-            totalHours
+            totalHours,
+            itemId
         );
         vm.stopPrank();
 
@@ -534,80 +649,20 @@ contract PaymentTest is Test {
             abi.encodePacked(payer, recipient, uint256(1))
         );
 
-        // 升级到V2
-        PaymentImplV2 v2 = new PaymentImplV2();
-        vm.startPrank(owner);
-        payment.upgradeToAndCall(address(v2), new bytes(0));
-        vm.stopPrank();
-
         // warp 1小时后批量释放
         vm.warp(block.timestamp + 1 hours);
         bytes32[] memory ids = new bytes32[](2);
         ids[0] = paymentId1;
         ids[1] = paymentId2;
-        PaymentImplV2(address(payment)).batchReleaseHourlyPayment(ids);
+        payment.batchReleaseHourlyPayment(ids);
 
-        PaymentImplV2.PaymentPlan memory plan1 = PaymentImplV2(address(payment))
-            .getPaymentPlan(paymentId1);
-        PaymentImplV2.PaymentPlan memory plan2 = PaymentImplV2(address(payment))
-            .getPaymentPlan(paymentId2);
+        PaymentImpl.PaymentPlan memory plan1 = payment.getPaymentPlan(
+            paymentId1
+        );
+        PaymentImpl.PaymentPlan memory plan2 = payment.getPaymentPlan(
+            paymentId2
+        );
         assertEq(plan1.paidHours, 1);
         assertEq(plan2.paidHours, 1);
-    }
-
-    function testV3CreatePaymentPlanWithData() public {
-        // 升级到V3
-        PaymentImplV3 v3 = new PaymentImplV3();
-        vm.startPrank(owner);
-        payment.upgradeToAndCall(address(v3), new bytes(0));
-        vm.stopPrank();
-        PaymentImplV3 paymentV3 = PaymentImplV3(address(payment));
-
-        uint256 totalAmount = 100 ether;
-        uint256 totalHours = 240;
-        bytes32 data = keccak256("item-1");
-
-        vm.warp(block.timestamp + 10);
-
-        // 正常创建
-        vm.startPrank(payer);
-        mockToken.approve(address(paymentV3), totalAmount);
-        paymentV3.createPaymentPlan(
-            payer,
-            recipient,
-            address(mockToken),
-            totalAmount,
-            totalHours,
-            data
-        );
-        vm.stopPrank();
-
-        // 30秒内不能重复
-        vm.startPrank(payer);
-        mockToken.approve(address(paymentV3), totalAmount);
-        vm.expectRevert("item recently purchased");
-        paymentV3.createPaymentPlan(
-            payer,
-            recipient,
-            address(mockToken),
-            totalAmount,
-            totalHours,
-            data
-        );
-        vm.stopPrank();
-
-        // 10秒后可以再次创建
-        vm.warp(block.timestamp + 10);
-        vm.startPrank(payer);
-        mockToken.approve(address(paymentV3), totalAmount);
-        paymentV3.createPaymentPlan(
-            payer,
-            recipient,
-            address(mockToken),
-            totalAmount,
-            totalHours,
-            data
-        );
-        vm.stopPrank();
     }
 }
