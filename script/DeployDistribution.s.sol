@@ -16,7 +16,7 @@ contract DeployDistribution is Script {
         address initialOwner = deployer;
         Distribution distribution = new Distribution(initialOwner, initialTreasury);
 
-        address usdt = 0x4be5136fE3E5c908183ec56A55C5A8fE6896faf2;
+        address usdt = 0x94b008aA00579c1307B0EF2c499aD98a8ce58e58;
 
         distribution.whitelistCurrency(usdt, true);
 

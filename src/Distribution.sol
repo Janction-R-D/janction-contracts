@@ -22,7 +22,10 @@ contract Distribution is Ownable {
     /// @dev currency => is whitelisted
     mapping(address => bool) public isCurrencyWhitelisted;
 
-    constructor(address initialOwner, address initialTreasury) Ownable(initialOwner) {
+    constructor(
+        address initialOwner,
+        address initialTreasury
+    ) Ownable(initialOwner) {
         treasury = initialTreasury;
     }
 
@@ -59,11 +62,13 @@ contract Distribution is Ownable {
             remainingAmount -= rewards[i];
         }
 
-        IERC20(currency).safeTransferFrom(
-            msg.sender,
-            treasury,
-            remainingAmount
-        );
+        if (remainingAmount > 0) {
+            IERC20(currency).safeTransferFrom(
+                msg.sender,
+                treasury,
+                remainingAmount
+            );
+        }
 
         emit Distributed(
             msg.sender,

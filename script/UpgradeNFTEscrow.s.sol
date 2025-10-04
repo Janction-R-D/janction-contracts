@@ -5,25 +5,18 @@ import "forge-std/Script.sol";
 import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 import {NFTEscrowImpl} from "../src/NFTEscrowImpl.sol";
 
-
-contract DeployNFTEscrow is Script {
+contract UpgradeNFTEscrow is Script {
     uint256 deployerPrivateKey = vm.envUint("PRIVATE_KEY");
     address deployer = vm.addr(deployerPrivateKey);
-    address initialOwner = deployer;
-    address janctionNFT = 0x437ec4194ee2EFdBF326fD16ebaa29418CF8c451;
+    NFTEscrowImpl nftEscrowProxy = NFTEscrowImpl(0x75A5FCe7F34c120d8783c6AEC4d5a5063f51846B);
 
     function run() external {
         vm.startBroadcast(deployerPrivateKey);
 
         NFTEscrowImpl nftEscrowImpl = new NFTEscrowImpl();
-        ERC1967Proxy nftEscrowProxy = new ERC1967Proxy(address(nftEscrowImpl), abi.encodeWithSelector(
-            NFTEscrowImpl.initialize.selector,
-            initialOwner,
-            janctionNFT
-        ));
+        nftEscrowProxy.upgradeToAndCall(address(nftEscrowImpl), new bytes(0));
 
         console.log("NFTEscrowImpl:", address(nftEscrowImpl));
-        console.log("NFTEscrowProxy:", address(nftEscrowProxy));
 
         vm.stopBroadcast();
     }

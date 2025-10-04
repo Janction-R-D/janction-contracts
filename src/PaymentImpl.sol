@@ -6,12 +6,9 @@ import {OwnableUpgradeable} from "@openzeppelin/contracts-upgradeable/access/Own
 import {EIP712Upgradeable} from "@openzeppelin/contracts-upgradeable/utils/cryptography/EIP712Upgradeable.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
+import {ECDSA} from "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
 
-contract PaymentImpl is
-    UUPSUpgradeable,
-    OwnableUpgradeable,
-    EIP712Upgradeable
-{
+contract PaymentImpl is UUPSUpgradeable, OwnableUpgradeable, EIP712Upgradeable {
     using SafeERC20 for IERC20;
 
     struct EIP712Signature {
@@ -87,6 +84,10 @@ contract PaymentImpl is
     /// @dev item data => last purchase time
     mapping(bytes32 => uint256) public lastPurchaseTime;
 
+    constructor() {
+        _disableInitializers();
+    }
+
     modifier onlyAdmin() {
         require(msg.sender == _administrator, "only admin");
         _;
@@ -105,7 +106,10 @@ contract PaymentImpl is
         _administrator = initialAdmin;
         _treasury = initialTreasury;
         signatureThreshold = initialThreshold;
-        require(initialFeePoints <= BASIS_POINTS, "fee points cannot exceed 100%");
+        require(
+            initialFeePoints <= BASIS_POINTS,
+            "fee points cannot exceed 100%"
+        );
         feePoints = initialFeePoints;
         purchaseInterval = initialPurchaseInterval;
     }
@@ -254,11 +258,17 @@ contract PaymentImpl is
 
         try this.releaseHourlyPayment(paymentId) {} catch {}
 
-        uint256 remainingBalance = plan.totalAmount -
-            plan.paidHours *
-            plan.hourlyAmount;
+        uint256 remainingBalance = 0;
+        if (plan.paidHours < plan.totalHours) {
+            remainingBalance =
+                plan.totalAmount -
+                plan.paidHours *
+                plan.hourlyAmount;
+        }
 
-        IERC20(plan.currency).safeTransfer(plan.payer, remainingBalance);
+        if (remainingBalance > 0) {
+            IERC20(plan.currency).safeTransfer(plan.payer, remainingBalance);
+        }
 
         plan.stopped = true;
 
@@ -278,11 +288,17 @@ contract PaymentImpl is
         // Try to release any due hourly payment before stopping
         try this.releaseHourlyPayment(paymentId) {} catch {}
 
-        uint256 remainingBalance = plan.totalAmount -
-            plan.paidHours *
-            plan.hourlyAmount;
+        uint256 remainingBalance = 0;
+        if (plan.paidHours < plan.totalHours) {
+            remainingBalance =
+                plan.totalAmount -
+                plan.paidHours *
+                plan.hourlyAmount;
+        }
 
-        IERC20(plan.currency).safeTransfer(plan.payer, remainingBalance);
+        if (remainingBalance > 0) {
+            IERC20(plan.currency).safeTransfer(plan.payer, remainingBalance);
+        }
 
         plan.stopped = true;
 
@@ -322,7 +338,7 @@ contract PaymentImpl is
 
         plan.paidHours += hoursToPay;
 
-        uint256 fee = amountToTransfer * feePoints / BASIS_POINTS;
+        uint256 fee = (amountToTransfer * feePoints) / BASIS_POINTS;
 
         uint256 remaining = amountToTransfer - fee;
 
@@ -368,7 +384,7 @@ contract PaymentImpl is
         EIP712Signature memory signature
     ) internal view returns (address) {
         require(block.timestamp < signature.deadline, "signature expired");
-        address recoveredAddress = ecrecover(
+        address recoveredAddress = ECDSA.recover(
             digest,
             signature.v,
             signature.r,

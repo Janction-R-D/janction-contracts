@@ -65,9 +65,10 @@ contract NFTEscrowTest is Test {
         assertEq(nftEscrowProxyV2.ownerByToken(tokenId), user1);
     }
 
-    function testFailUpgradeToV2NotOwner() public {
+    function testRevertUpgradeToV2NotOwner() public {
         NFTEscrowImplV2 nftEscrowImplV2 = new NFTEscrowImplV2();
 
+        vm.expectRevert();
         vm.startPrank(user1);
         nftEscrowProxy.upgradeToAndCall(address(nftEscrowImplV2), new bytes(0));
         vm.stopPrank();
@@ -148,35 +149,39 @@ contract NFTEscrowTest is Test {
         assertEq(nftEscrowProxy.ownerByToken(tokenId), user1);
     }
 
-    function testFailUnescrowNotOwner() public {
+    function testRevertUnescrowNotOwner() public {
         vm.startPrank(user1);
         uint256 tokenId = 1;
         nft.approve(address(nftEscrowProxy), tokenId);
         nftEscrowProxy.escrow(tokenId);
         vm.stopPrank();
 
+        vm.expectRevert();
         vm.startPrank(user2);
         nftEscrowProxy.unescrow(tokenId);
         vm.stopPrank();
     }
 
-    function testFailEscrowNotApproved() public {
-        vm.startPrank(user1);
+    function testRevertEscrowNotApproved() public {
         uint256 tokenId = 1;
+
+        vm.expectRevert();
+        vm.startPrank(user1);
         nftEscrowProxy.escrow(tokenId);
         vm.stopPrank();
     }
 
-    function testFailWithdrawNotOwner() public {
+    function testRevertWithdrawNotOwner() public {
         vm.startPrank(user1);
         uint256 tokenId = 1;
         nft.approve(address(nftEscrowProxy), tokenId);
         nftEscrowProxy.escrow(tokenId);
         vm.stopPrank();
 
-        vm.startPrank(user2);
         uint256[] memory tokenIds = new uint256[](1);
         tokenIds[0] = tokenId;
+        vm.expectRevert();
+        vm.startPrank(user2);
         nftEscrowProxy.withdraw(tokenIds, user2);
         vm.stopPrank();
     }

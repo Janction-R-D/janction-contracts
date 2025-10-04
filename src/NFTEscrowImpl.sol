@@ -11,16 +11,27 @@ contract NFTEscrowImpl is UUPSUpgradeable, OwnableUpgradeable {
 
     address public janctionNFT;
 
-    mapping (uint256 => address) public ownerByToken;
+    mapping(uint256 => address) public ownerByToken;
+
+    constructor() {
+        _disableInitializers();
+    }
 
     function initialize(address initialOwner, address nft) public initializer {
         __Ownable_init(initialOwner);
         janctionNFT = nft;
     }
 
-    function withdraw(uint256[] memory tokenIdList, address to) public onlyOwner {
-        for(uint256 i = 0; i < tokenIdList.length; ++i) {
-            IERC721(janctionNFT).transferFrom(address(this), to, tokenIdList[i]);
+    function withdraw(
+        uint256[] memory tokenIdList,
+        address to
+    ) public onlyOwner {
+        for (uint256 i = 0; i < tokenIdList.length; ++i) {
+            IERC721(janctionNFT).transferFrom(
+                address(this),
+                to,
+                tokenIdList[i]
+            );
         }
     }
 
@@ -33,7 +44,7 @@ contract NFTEscrowImpl is UUPSUpgradeable, OwnableUpgradeable {
     }
 
     function batchEscrow(uint256[] memory tokenIdList) public {
-        for(uint256 i = 0; i < tokenIdList.length; ++i) {
+        for (uint256 i = 0; i < tokenIdList.length; ++i) {
             escrow(tokenIdList[i]);
         }
     }
@@ -49,12 +60,12 @@ contract NFTEscrowImpl is UUPSUpgradeable, OwnableUpgradeable {
     }
 
     function batchUnescrow(uint256[] memory tokenIdList) public {
-        for(uint256 i = 0; i < tokenIdList.length; ++i) {
+        for (uint256 i = 0; i < tokenIdList.length; ++i) {
             unescrow(tokenIdList[i]);
         }
     }
 
     function _authorizeUpgrade(
         address newImplementation
-    ) internal onlyOwner virtual override {}
+    ) internal virtual override onlyOwner {}
 }
